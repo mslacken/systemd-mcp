@@ -74,6 +74,7 @@ func (sj *HostLog) ListLogTimeout(ctx context.Context, cc *mcp.ServerSession, pa
 // get the lat log entries for a given unit, else just the last messages
 func (sj *HostLog) ListLog(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[ListLogParams]) (*mcp.CallToolResultFor[any], error) {
 	if params.Arguments.Unit != "" {
+		sj.journal.FlushMatches()
 		if err := sj.journal.AddMatch("SYSLOG_IDENTIFIER=" + params.Arguments.Unit); err != nil {
 			return nil, fmt.Errorf("failed to add unit filter: %w", err)
 		}
@@ -82,6 +83,7 @@ func (sj *HostLog) ListLog(ctx context.Context, cc *mcp.ServerSession, params *m
 			return nil, err
 		}
 		if seek == 0 {
+			sj.journal.FlushMatches()
 			if err := sj.journal.AddMatch("_SYSTEMD_USER_UNIT=" + params.Arguments.Unit); err != nil {
 				return nil, fmt.Errorf("failed to add unit filter: %w", err)
 			}
@@ -95,7 +97,6 @@ func (sj *HostLog) ListLog(ctx context.Context, cc *mcp.ServerSession, params *m
 				if err != nil {
 					return nil, err
 				}
-
 			}
 		}
 	} else {
