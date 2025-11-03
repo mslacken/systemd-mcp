@@ -44,19 +44,19 @@ func (sj *HostLog) seekAndSkip(count uint64) (uint64, error) {
 	}
 }
 
-func (sj *HostLog) ListLogTimeout(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[ListLogParams]) (*mcp.CallToolResultFor[any], error) {
+func (sj *HostLog) ListLogTimeout(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
 
 	resultChan := make(chan struct {
-		res *mcp.CallToolResultFor[any]
+		res *mcp.CallToolResult
 		err error
 	}, 1)
 
 	go func() {
-		res, err := sj.ListLog(timeoutCtx, cc, params)
+		res, _, err := sj.ListLog(timeoutCtx, req, params)
 		resultChan <- struct {
-			res *mcp.CallToolResultFor[any]
+			res *mcp.CallToolResult
 			err error
 		}{res: res, err: err}
 	}()
@@ -64,45 +64,45 @@ func (sj *HostLog) ListLogTimeout(ctx context.Context, cc *mcp.ServerSession, pa
 	select {
 	case <-timeoutCtx.Done():
 		// The timeout context was cancelled, meaning the timeout occurred.
-		return nil, fmt.Errorf("timed out: %w", timeoutCtx.Err())
+		return nil, nil, fmt.Errorf("timed out: %w", timeoutCtx.Err())
 	case result := <-resultChan:
 		// ListLog completed within the timeout.
-		return result.res, result.err
+		return result.res, nil, result.err
 	}
 }
 
 // get the lat log entries for a given unit, else just the last messages
-func (sj *HostLog) ListLog(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[ListLogParams]) (*mcp.CallToolResultFor[any], error) {
-	if params.Arguments.Unit != "" {
-		sj.journal.FlushMatches()
-		if err := sj.journal.AddMatch("SYSLOG_IDENTIFIER=" + params.Arguments.Unit); err != nil {
-			return nil, fmt.Errorf("failed to add unit filter: %w", err)
+func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
+	if params.Unit != "" {
+    sj.journal.FlushMatches()
+		if err := sj.journal.AddMatch("SYSLOG_IDENTIFIER=" + params.Unit); err != nil {
+			return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
 		}
-		seek, err := sj.seekAndSkip(uint64(params.Arguments.Count))
+		seek, err := sj.seekAndSkip(uint64(params.Count))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if seek == 0 {
 			sj.journal.FlushMatches()
-			if err := sj.journal.AddMatch("_SYSTEMD_USER_UNIT=" + params.Arguments.Unit); err != nil {
-				return nil, fmt.Errorf("failed to add unit filter: %w", err)
+      if err := sj.journal.AddMatch("_SYSTEMD_USER_UNIT=" + params.Unit); err != nil {
+				return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
 			}
-			seek, err := sj.seekAndSkip(uint64(params.Arguments.Count))
+			seek, err := sj.seekAndSkip(uint64(params.Count))
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if seek == 0 {
 				sj.journal.FlushMatches()
-				_, err := sj.seekAndSkip(uint64(params.Arguments.Count))
+				_, err := sj.seekAndSkip(uint64(params.Count))
 				if err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 			}
 		}
 	} else {
-		_, err := sj.seekAndSkip(uint64(params.Arguments.Count))
+		_, err := sj.seekAndSkip(uint64(params.Count))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 	}
@@ -110,7 +110,7 @@ func (sj *HostLog) ListLog(ctx context.Context, cc *mcp.ServerSession, params *m
 	for {
 		entry, err := sj.journal.GetEntry()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get entry: %w", err)
+			return nil, nil, fmt.Errorf("failed to get entry: %w", err)
 		}
 
 		timestamp := time.Unix(0, int64(entry.RealtimeTimestamp)*int64(time.Microsecond))
@@ -133,21 +133,21 @@ func (sj *HostLog) ListLog(ctx context.Context, cc *mcp.ServerSession, params *m
 		}
 		jsonByte, err := json.Marshal(&structEntr)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		txtContentList = append(txtContentList, &mcp.TextContent{
 			Text: string(jsonByte),
 		})
 		ret, err := sj.journal.Next()
 		if err != nil {
-			return nil, fmt.Errorf("failed to read next entry: %w", err)
+			return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
 		}
 		if ret == 0 {
 			break
 		}
 
 	}
-	return &mcp.CallToolResultFor[any]{
+	return &mcp.CallToolResult{
 		Content: txtContentList,
-	}, nil
+	}, nil, nil
 }

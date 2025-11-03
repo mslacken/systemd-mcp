@@ -37,7 +37,7 @@ func (m *mockDbusConnection) GetAllPropertiesContext(ctx context.Context, unitNa
 func TestListUnitHandlerNameState(t *testing.T) {
 	tests := []struct {
 		name          string
-		params        *mcp.CallToolParamsFor[ListUnitNameParams]
+		params        *ListUnitNameParams
 		mockListUnits func(patterns []string, states []string) ([]dbus.UnitStatus, error)
 		mockGetProps  func(unitName string) (map[string]interface{}, error)
 		want          []mcp.Content
@@ -45,11 +45,9 @@ func TestListUnitHandlerNameState(t *testing.T) {
 	}{
 		{
 			name: "success",
-			params: &mcp.CallToolParamsFor[ListUnitNameParams]{
-				Arguments: ListUnitNameParams{
-					Names:   []string{"test.service"},
-					Verbose: false,
-				},
+			params: &ListUnitNameParams{
+				Names:   []string{"test.service"},
+				Verbose: false,
 			},
 			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
 				return []dbus.UnitStatus{{Name: "test.service"}}, nil
@@ -66,10 +64,8 @@ func TestListUnitHandlerNameState(t *testing.T) {
 		},
 		{
 			name: "no units found",
-			params: &mcp.CallToolParamsFor[ListUnitNameParams]{
-				Arguments: ListUnitNameParams{
-					Names: []string{"nonexistent.service"},
-				},
+			params: &ListUnitNameParams{
+				Names: []string{"nonexistent.service"},
 			},
 			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
 				return []dbus.UnitStatus{}, nil
@@ -78,10 +74,8 @@ func TestListUnitHandlerNameState(t *testing.T) {
 		},
 		{
 			name: "dbus error on list units",
-			params: &mcp.CallToolParamsFor[ListUnitNameParams]{
-				Arguments: ListUnitNameParams{
-					Names: []string{"test.service"},
-				},
+			params: &ListUnitNameParams{
+				Names: []string{"test.service"},
 			},
 			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
 				return nil, fmt.Errorf("dbus error")
@@ -90,10 +84,8 @@ func TestListUnitHandlerNameState(t *testing.T) {
 		},
 		{
 			name: "dbus error on get properties",
-			params: &mcp.CallToolParamsFor[ListUnitNameParams]{
-				Arguments: ListUnitNameParams{
-					Names: []string{"test.service"},
-				},
+			params: &ListUnitNameParams{
+				Names: []string{"test.service"},
 			},
 			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
 				return []dbus.UnitStatus{{Name: "test.service"}}, nil
@@ -105,10 +97,8 @@ func TestListUnitHandlerNameState(t *testing.T) {
 		},
 		{
 			name: "success with multiple units",
-			params: &mcp.CallToolParamsFor[ListUnitNameParams]{
-				Arguments: ListUnitNameParams{
-					Names: []string{"test1.service", "test2.service"},
-				},
+			params: &ListUnitNameParams{
+				Names: []string{"test1.service", "test2.service"},
 			},
 			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
 				return []dbus.UnitStatus{{Name: "test1.service"}, {Name: "test2.service"}}, nil
@@ -128,11 +118,9 @@ func TestListUnitHandlerNameState(t *testing.T) {
 		},
 		{
 			name: "success with additional properties",
-			params: &mcp.CallToolParamsFor[ListUnitNameParams]{
-				Arguments: ListUnitNameParams{
-					Names:   []string{"test.service"},
-					Verbose: false,
-				},
+			params: &ListUnitNameParams{
+				Names:   []string{"test.service"},
+				Verbose: false,
 			},
 			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
 				return []dbus.UnitStatus{{Name: "test.service"}}, nil
@@ -146,7 +134,8 @@ func TestListUnitHandlerNameState(t *testing.T) {
 				},
 			},
 			wantErr: false,
-		}}
+		},
+	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -157,7 +146,7 @@ func TestListUnitHandlerNameState(t *testing.T) {
 				},
 			}
 
-			got, err := conn.ListUnitHandlerNameState(context.Background(), nil, tt.params)
+			got, nil, err := conn.ListUnitHandlerNameState(context.Background(), nil, tt.params)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("ListUnitHandlerNameState() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -170,8 +159,6 @@ func TestListUnitHandlerNameState(t *testing.T) {
 				for i := range got.Content {
 					gotText := got.Content[i].(*mcp.TextContent).Text
 					wantText := tt.want[i].(*mcp.TextContent).Text
-
-					
 
 					assert.JSONEq(t, wantText, gotText)
 				}

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-systemd/v22/dbus"
-	"github.com/modelcontextprotocol/go-sdk/jsonschema"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
 )
@@ -60,46 +60,31 @@ func ValidStates() []string {
 }
 
 type ListUnitParams struct {
-	States  []string `json:"states" jsonschema:"List of the states. The keyword 'all' can be used to get all available units on the system."`
-	Verbose bool     `json:"verbose" jsonschema:"The verbose flag should only used for debugging and only if the without verbosed too less information was provided."`
+	State   string `json:"state" jsonschema:"List units that are in this state. The keyword 'all' can be used to get all available units on the system."`
+	Verbose bool   `json:"verbose" jsonschema:"Set to true for more detail. Otherwise set to false."`
 }
 
-func GetListUnitsParamsSchema() (*jsonschema.Schema, error) {
-	schema, err := jsonschema.For[ListUnitParams]()
-	if err != nil {
-		return nil, err
-	}
-	validList := []any{}
-	for _, s := range ValidStates() {
-		validList = append(validList, any(s))
-	}
-	schema.Properties["states"].Enum = validList
-	return schema, nil
-}
-
-func (conn *Connection) ListUnitState(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[ListUnitParams]) (*mcp.CallToolResultFor[any], error) {
+func (conn *Connection) ListUnitState(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitParams) (*mcp.CallToolResult, any, error) {
 	var err error
-	reqStates := params.Arguments.States
-	if len(reqStates) == 0 {
-		reqStates = []string{"running"}
+	reqState := params.State
+	if reqState == "" {
+		reqState = "running"
 	} else {
-		for _, s := range reqStates {
-			if !slices.Contains(ValidStates(), s) {
-				return nil, fmt.Errorf("requsted state %s is not a valid state", s)
-			}
+		if !slices.Contains(ValidStates(), reqState) {
+			return nil, nil, fmt.Errorf("requsted state %s is not a valid state", reqState)
 		}
 	}
 	var units []dbus.UnitStatus
 	// route can't be taken as it confuses small modells
-	if slices.Contains(reqStates, "all") {
+	if reqState == "all" {
 		units, err = conn.dbus.ListUnitsContext(ctx)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	} else {
-		units, err = conn.dbus.ListUnitsFilteredContext(ctx, reqStates)
+		units, err = conn.dbus.ListUnitsFilteredContext(ctx, []string{reqState})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	type LightUnit struct {
@@ -111,7 +96,7 @@ func (conn *Connection) ListUnitState(ctx context.Context, cc *mcp.ServerSession
 	txtContenList := []mcp.Content{}
 	for _, u := range units {
 		var jsonByte []byte
-		if params.Arguments.Verbose {
+		if params.Verbose {
 			jsonByte, _ = json.Marshal(&u)
 		} else {
 			lightUnit := LightUnit{
@@ -127,42 +112,41 @@ func (conn *Connection) ListUnitState(ctx context.Context, cc *mcp.ServerSession
 
 	}
 
-	return &mcp.CallToolResultFor[any]{
+	return &mcp.CallToolResult{
 		Content: txtContenList,
-	}, nil
+	}, nil, nil
 }
 
 type ListUnitNameParams struct {
 	Names   []string `json:"names" jsonschema:"List units with the given by their names. Regular expressions should be used. The request foo* expands to foo.service. Useful patterns are '*.timer' for all timers, '*.service' for all services, '*.mount for all mounts, '*.socket' for all sockets."`
-	Verbose bool     `json:"debug" jsonschema:"The debug flag should only used for debugging and only if without the verbose flag too less information was provided."`
+	Verbose bool     `json:"verbose" jsonschema:"Set to true for more detail. Otherwise set to false."`
 }
 
 /*
 Handler to list the unit by name
 */
-func (conn *Connection) ListUnitHandlerNameState(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[ListUnitNameParams]) (*mcp.CallToolResultFor[any], error) {
+func (conn *Connection) ListUnitHandlerNameState(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitNameParams) (*mcp.CallToolResult, any, error) {
 	var err error
-	reqNames := params.Arguments.Names
+	reqNames := params.Names
 	// reqStates := request.GetStringSlice("states", []string{""})
 	var units []dbus.UnitStatus
 	units, err = conn.dbus.ListUnitsByPatternsContext(ctx, []string{}, reqNames)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// unitProps := make([]map[string]interface{}, 1, 1)
 	txtContentList := []mcp.Content{}
 	for _, u := range units {
 		props, err := conn.dbus.GetAllPropertiesContext(ctx, u.Name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		props = util.ClearMap(props)
 		jsonByte, err := json.Marshal(&props)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if params.Arguments.Verbose {
-
+		if params.Verbose {
 			txtContentList = append(txtContentList, &mcp.TextContent{
 				Text: string(jsonByte),
 			})
@@ -206,11 +190,11 @@ func (conn *Connection) ListUnitHandlerNameState(ctx context.Context, cc *mcp.Se
 			}{}
 			err = json.Unmarshal(jsonByte, &prop)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			jsonByte, err = json.Marshal(&prop)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			txtContentList = append(txtContentList, &mcp.TextContent{
 				Text: string(jsonByte),
@@ -219,11 +203,11 @@ func (conn *Connection) ListUnitHandlerNameState(ctx context.Context, cc *mcp.Se
 
 	}
 	if len(txtContentList) == 0 {
-		return nil, fmt.Errorf("found no units with name pattern: %v", reqNames)
+		return nil, nil, fmt.Errorf("found no units with name pattern: %v", reqNames)
 	}
-	return &mcp.CallToolResultFor[any]{
+	return &mcp.CallToolResult{
 		Content: txtContentList,
-	}, nil
+	}, nil, nil
 }
 
 // helper function to get the valid states
@@ -276,7 +260,7 @@ func ValidRestartModes() []string {
 const MaxTimeOut uint = 60
 
 func GetRestsartReloadParamsSchema() (*jsonschema.Schema, error) {
-	schema, err := jsonschema.For[RestartReloadParams]()
+	schema, err := jsonschema.For[RestartReloadParams](nil)
 	if err != nil {
 		return nil, err
 	}
@@ -289,44 +273,45 @@ func GetRestsartReloadParamsSchema() (*jsonschema.Schema, error) {
 }
 
 // restart or reload a service
-func (conn *Connection) RestartReloadUnit(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[RestartReloadParams]) (res *mcp.CallToolResultFor[any], err error) {
-	if params.Arguments.Mode == "" {
-		params.Arguments.Mode = "replace"
+func (conn *Connection) RestartReloadUnit(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
+	if params.Mode == "" {
+		params.Mode = "replace"
 	}
-	if !slices.Contains(ValidRestartModes(), params.Arguments.Mode) {
-		return nil, fmt.Errorf("invalid mode for restart or reload: %s", params.Arguments.Mode)
+	if !slices.Contains(ValidRestartModes(), params.Mode) {
+		return nil, nil, fmt.Errorf("invalid mode for restart or reload: %s", params.Mode)
 	}
-	if params.Arguments.TimeOut > MaxTimeOut {
-		return nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
+	if params.TimeOut > MaxTimeOut {
+		return nil, nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
 	}
-	if params.Arguments.Forcerestart {
-		_, err = conn.dbus.RestartUnitContext(ctx, params.Arguments.Name, params.Arguments.Mode, conn.rchannel)
+	if params.Forcerestart {
+		_, err = conn.dbus.RestartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
 	} else {
-		_, err = conn.dbus.ReloadOrRestartUnitContext(ctx, params.Arguments.Name, params.Arguments.Mode, conn.rchannel)
+		_, err = conn.dbus.ReloadOrRestartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return conn.CheckForRestartReloadRunning(ctx, cc, &mcp.CallToolParamsFor[CheckReloadRestartParams]{
-		Arguments: CheckReloadRestartParams{TimeOut: params.Arguments.TimeOut},
+	return conn.CheckForRestartReloadRunning(ctx, req, &RestartReloadParams{
+		TimeOut: params.TimeOut,
 	})
 }
-func (conn *Connection) StartUnit(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[RestartReloadParams]) (res *mcp.CallToolResultFor[any], err error) {
-	if params.Arguments.Mode == "" {
-		params.Arguments.Mode = "replace"
+
+func (conn *Connection) StartUnit(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
+	if params.Mode == "" {
+		params.Mode = "replace"
 	}
-	if !slices.Contains(ValidRestartModes(), params.Arguments.Mode) {
-		return nil, fmt.Errorf("invalid mode for restart or reload: %s", params.Arguments.Mode)
+	if !slices.Contains(ValidRestartModes(), params.Mode) {
+		return nil, nil, fmt.Errorf("invalid mode for restart or reload: %s", params.Mode)
 	}
-	if params.Arguments.TimeOut > MaxTimeOut {
-		return nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
+	if params.TimeOut > MaxTimeOut {
+		return nil, nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
 	}
-	_, err = conn.dbus.StartUnitContext(ctx, params.Arguments.Name, params.Arguments.Mode, conn.rchannel)
+	_, err = conn.dbus.StartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return conn.CheckForRestartReloadRunning(ctx, cc, &mcp.CallToolParamsFor[CheckReloadRestartParams]{
-		Arguments: CheckReloadRestartParams{TimeOut: params.Arguments.TimeOut},
+	return conn.CheckForRestartReloadRunning(ctx, req, &RestartReloadParams{
+		TimeOut: params.TimeOut,
 	})
 }
 
@@ -335,32 +320,32 @@ type CheckReloadRestartParams struct {
 }
 
 // check status of reload or restart
-func (conn *Connection) CheckForRestartReloadRunning(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[CheckReloadRestartParams]) (res *mcp.CallToolResultFor[any], err error) {
+func (conn *Connection) CheckForRestartReloadRunning(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	select {
 	case result := <-conn.rchannel:
-		return &mcp.CallToolResultFor[any]{
+		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.TextContent{
 					Text: result,
 				},
 			},
-		}, nil
+		}, nil, nil
 	case <-time.After(3 * time.Second):
-		return &mcp.CallToolResultFor[any]{
+		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.TextContent{
 					Text: "Reload or restart still in progress.",
 				},
 			},
-		}, nil
+		}, nil, nil
 	default:
-		return &mcp.CallToolResultFor[any]{
+		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.TextContent{
 					Text: "Finished",
 				},
 			},
-		}, nil
+		}, nil, nil
 	}
 }
 
@@ -372,26 +357,26 @@ type StopParams struct {
 }
 
 // Stop or kill the given unit
-func (conn *Connection) StopUnit(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[StopParams]) (res *mcp.CallToolResultFor[any], err error) {
-	if params.Arguments.Mode == "" {
-		params.Arguments.Mode = "replace"
+func (conn *Connection) StopUnit(ctx context.Context, req *mcp.CallToolRequest, params *StopParams) (res *mcp.CallToolResult, _ any, err error) {
+	if params.Mode == "" {
+		params.Mode = "replace"
 	}
-	if !slices.Contains(ValidRestartModes(), params.Arguments.Mode) {
-		return nil, fmt.Errorf("invalid mode for restart or reload: %s", params.Arguments.Mode)
+	if !slices.Contains(ValidRestartModes(), params.Mode) {
+		return nil, nil, fmt.Errorf("invalid mode for restart or reload: %s", params.Mode)
 	}
-	if params.Arguments.TimeOut > MaxTimeOut {
-		return nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
+	if params.TimeOut > MaxTimeOut {
+		return nil, nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
 	}
-	if params.Arguments.Kill {
-		conn.dbus.KillUnitContext(ctx, params.Arguments.Name, int32(9))
+	if params.Kill {
+		conn.dbus.KillUnitContext(ctx, params.Name, int32(9))
 	} else {
-		_, err = conn.dbus.StopUnitContext(ctx, params.Arguments.Name, params.Arguments.Mode, conn.rchannel)
+		_, err = conn.dbus.StopUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return conn.CheckForRestartReloadRunning(ctx, cc, &mcp.CallToolParamsFor[CheckReloadRestartParams]{
-		Arguments: CheckReloadRestartParams{TimeOut: params.Arguments.TimeOut},
+	return conn.CheckForRestartReloadRunning(ctx, req, &RestartReloadParams{
+		TimeOut: params.TimeOut,
 	})
 }
 
@@ -400,27 +385,27 @@ type EnableParams struct {
 	Disable bool   `json"disable" jsonschema:"Set to true to disable the unit instead of enable."`
 }
 
-func (conn *Connection) EnableDisableUnit(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[EnableParams]) (res *mcp.CallToolResultFor[any], err error) {
-	if params.Arguments.Disable {
-		return conn.DisableUnit(ctx, cc, params)
+func (conn *Connection) EnableDisableUnit(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
+	if params.Disable {
+		return conn.DisableUnit(ctx, req, params)
 	} else {
-		return conn.EnableUnit(ctx, cc, params)
+		return conn.EnableUnit(ctx, req, params)
 	}
 }
 
-func (conn *Connection) EnableUnit(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[EnableParams]) (res *mcp.CallToolResultFor[any], err error) {
-	_, enabledRes, err := conn.dbus.EnableUnitFilesContext(ctx, []string{params.Arguments.File}, false, true)
+func (conn *Connection) EnableUnit(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
+	_, enabledRes, err := conn.dbus.EnableUnitFilesContext(ctx, []string{params.File}, false, true)
 	if err != nil {
-		return nil, fmt.Errorf("error when enabling: %w", err)
+		return nil, nil, fmt.Errorf("error when enabling: %w", err)
 	}
 	if len(enabledRes) == 0 {
-		return &mcp.CallToolResultFor[any]{
+		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.TextContent{
-					Text: fmt.Sprintf("nothing changed for %s", params.Arguments.File),
+					Text: fmt.Sprintf("nothing changed for %s", params.File),
 				},
 			},
-		}, nil
+		}, nil, nil
 	} else {
 		txtContentList := []mcp.Content{}
 		for _, res := range enabledRes {
@@ -435,31 +420,31 @@ func (conn *Connection) EnableUnit(ctx context.Context, cc *mcp.ServerSession, p
 			}
 			jsonByte, err := json.Marshal(resJson)
 			if err != nil {
-				return nil, fmt.Errorf("could not unmarshall result: %w", err)
+				return nil, nil, fmt.Errorf("could not unmarshall result: %w", err)
 			}
 			txtContentList = append(txtContentList, &mcp.TextContent{
 				Text: string(jsonByte),
 			})
 		}
-		return &mcp.CallToolResultFor[any]{
+		return &mcp.CallToolResult{
 			Content: txtContentList,
-		}, nil
+		}, nil, nil
 	}
 }
 
-func (conn *Connection) DisableUnit(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[EnableParams]) (res *mcp.CallToolResultFor[any], err error) {
-	disabledRes, err := conn.dbus.DisableUnitFilesContext(ctx, []string{params.Arguments.File}, false)
+func (conn *Connection) DisableUnit(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
+	disabledRes, err := conn.dbus.DisableUnitFilesContext(ctx, []string{params.File}, false)
 	if err != nil {
-		return nil, fmt.Errorf("error when disabling: %w", err)
+		return nil, nil, fmt.Errorf("error when disabling: %w", err)
 	}
 	if len(disabledRes) == 0 {
-		return &mcp.CallToolResultFor[any]{
+		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				&mcp.TextContent{
-					Text: fmt.Sprintf("nothing changed for %s", params.Arguments.File),
+					Text: fmt.Sprintf("nothing changed for %s", params.File),
 				},
 			},
-		}, nil
+		}, nil, nil
 	} else {
 		txtContentList := []mcp.Content{}
 		for _, res := range disabledRes {
@@ -474,15 +459,15 @@ func (conn *Connection) DisableUnit(ctx context.Context, cc *mcp.ServerSession, 
 			}
 			jsonByte, err := json.Marshal(resJson)
 			if err != nil {
-				return nil, fmt.Errorf("could not unmarshall result: %w", err)
+				return nil, nil, fmt.Errorf("could not unmarshall result: %w", err)
 			}
 			txtContentList = append(txtContentList, &mcp.TextContent{
 				Text: string(jsonByte),
 			})
 		}
-		return &mcp.CallToolResultFor[any]{
+		return &mcp.CallToolResult{
 			Content: txtContentList,
-		}, nil
+		}, nil, nil
 	}
 }
 
@@ -491,10 +476,10 @@ type ListUnitFilesParams struct {
 }
 
 // returns the unit files known to systemd
-func (conn *Connection) ListUnitFiles(ctx context.Context, cc *mcp.ServerSession, params *mcp.CallToolParamsFor[EnableParams]) (res *mcp.CallToolResultFor[any], err error) {
+func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitFilesParams) (res *mcp.CallToolResult, _ any, err error) {
 	unitList, err := conn.dbus.ListUnitFilesContext(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	txtContentList := []mcp.Content{}
 	for _, unit := range unitList {
@@ -507,14 +492,14 @@ func (conn *Connection) ListUnitFiles(ctx context.Context, cc *mcp.ServerSession
 		}
 		jsonByte, err := json.Marshal(uInfo)
 		if err != nil {
-			return nil, fmt.Errorf("could not unmarshall result: %w", err)
+			return nil, nil, fmt.Errorf("could not unmarshall result: %w", err)
 		}
 		txtContentList = append(txtContentList, &mcp.TextContent{
 			Text: string(jsonByte),
 		})
 
 	}
-	return &mcp.CallToolResultFor[any]{
+	return &mcp.CallToolResult{
 		Content: txtContentList,
-	}, nil
+	}, nil, nil
 }

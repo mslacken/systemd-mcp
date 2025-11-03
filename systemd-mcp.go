@@ -21,21 +21,17 @@ func main() {
 	slog.SetDefault(logger)
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
-		Version: "0.0.1"}, nil)
+		Version: "0.0.1",
+	}, nil)
 	systemConn, err := systemd.NewSystem(context.Background())
 	if err != nil {
 		slog.Warn("couldn't add systemd tools", slog.Any("error", err))
 	} else {
 		// add systend tool handler
-		listStateSchema, err := systemd.GetListUnitsParamsSchema()
-		if err != nil {
-			panic(err)
-		}
 		mcp.AddTool(server, &mcp.Tool{
 			Title:       "List units",
 			Name:        "list_systemd_units_by_state",
 			Description: fmt.Sprintf("List the requested systemd units and services on the host with the given state. Doesn't list the services in other states. As result the unit name, descrition and name are listed as json. Valid states are: %v", systemd.ValidStates()),
-			InputSchema: listStateSchema,
 		}, systemConn.ListUnitState)
 		mcp.AddTool(server, &mcp.Tool{
 			Name:        "list_systemd_units_by_name",
@@ -86,7 +82,7 @@ func main() {
 		slog.Info("MCP handler listening at", slog.String("address", *httpAddr))
 		http.ListenAndServe(*httpAddr, handler)
 	} else {
-		t := mcp.NewLoggingTransport(mcp.NewStdioTransport(), os.Stdout)
+		t := &mcp.LoggingTransport{Transport: &mcp.StdioTransport{}, Writer: os.Stderr}
 		if err := server.Run(context.Background(), t); err != nil {
 			slog.Error("Server failed", slog.Any("error", err))
 		}
