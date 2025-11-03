@@ -476,7 +476,7 @@ type ListUnitFilesParams struct {
 }
 
 // returns the unit files known to systemd
-func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
+func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitFilesParams) (res *mcp.CallToolResult, _ any, err error) {
 	unitList, err := conn.dbus.ListUnitFilesContext(ctx)
 	if err != nil {
 		return nil, nil, err
