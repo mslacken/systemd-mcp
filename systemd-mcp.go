@@ -87,7 +87,7 @@ func main() {
 				Tool: &mcp.Tool{
 					Title:       "List units",
 					Name:        "list_systemd_units_by_state",
-					Description: fmt.Sprintf("List the requested systemd units and services on the host with the given state. Doesn't list the services in other states. As result the unit name, descrition and name are listed as json. Valid states are: %v", systemd.ValidStates()),
+					Description: fmt.Sprintf("List the requested systemd units and services on the host with the given state. Does not list the services in other states. As a result the unit name, description and name are listed as json. Valid states are: %v", systemd.ValidStates()),
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
 					mcp.AddTool(server, tool, systemConn.ListUnitState)
@@ -99,7 +99,7 @@ func main() {
 			}{
 				Tool: &mcp.Tool{
 					Name:        "list_systemd_units_by_name",
-					Description: "List the requested systemd unit by it's names or patterns. The output is a json formated with all available non empty fields. This are properites of the unit/service.",
+					Description: "List the requested systemd unit by its names or patterns. The output is a JSON formatted with all available non-empty fields. These are properties of the unit/service.",
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
 					mcp.AddTool(server, tool, systemConn.ListUnitHandlerNameState)
@@ -147,7 +147,7 @@ func main() {
 			}{
 				Tool: &mcp.Tool{
 					Name:        "check_restart_reload",
-					Description: "Check the reload or restart status of a unit. Can only be called if the restart or reload job had a timeout.",
+					Description: "Check the reload or restart status of a unit. Can only be called if the restart or reload job timed out.",
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
 					mcp.AddTool(server, tool, systemConn.CheckForRestartReloadRunning)
@@ -159,7 +159,7 @@ func main() {
 			}{
 				Tool: &mcp.Tool{
 					Name:        "enable_or_disable_unit",
-					Description: "Enable an unit or service for the next startup of the system. This doesn't start the unit.",
+					Description: "Enable a unit or service for the next startup of the system. This does not start the unit.",
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
 					mcp.AddTool(server, tool, systemConn.EnableDisableUnit)
@@ -171,7 +171,7 @@ func main() {
 			}{
 				Tool: &mcp.Tool{
 					Name:        "list_unit_files",
-					Description: "Returns a list of all the unit files known to systemd. This tool can be used to determine the correct names for all the other correct unit/service names for the other calls.",
+					Description: "Returns a list of all the unit files known to systemd. This tool can be used to determine the correct unit/service names for other calls.",
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
 					mcp.AddTool(server, tool, systemConn.ListUnitFiles)
@@ -181,7 +181,7 @@ func main() {
 	}
 	descriptionJournal := "Get the last log entries for the given service or unit."
 	if os.Geteuid() != 0 {
-		descriptionJournal += "Please note that this tool is not running as root, so system ressources may not been listed correctly."
+		descriptionJournal += "Please note that this tool is not running as root, so system resources may not be listed correctly."
 	}
 	log, err := journal.NewLog()
 	if err != nil {
