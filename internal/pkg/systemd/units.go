@@ -61,7 +61,7 @@ func ValidStates() []string {
 
 type ListUnitParams struct {
 	State   string `json:"state" jsonschema:"List units that are in this state. The keyword 'all' can be used to get all available units on the system."`
-	Verbose bool   `json:"verbose" jsonschema:"Set to true for more detail. Otherwise set to false."`
+	Verbose bool   `json:"verbose,omitempty" jsonschema:"Set to true for more detail. Otherwise set to false."`
 }
 
 func (conn *Connection) ListUnitState(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitParams) (*mcp.CallToolResult, any, error) {
@@ -119,7 +119,7 @@ func (conn *Connection) ListUnitState(ctx context.Context, req *mcp.CallToolRequ
 
 type ListUnitNameParams struct {
 	Names   []string `json:"names" jsonschema:"List units with the given by their names. Regular expressions should be used. The request foo* expands to foo.service. Useful patterns are '*.timer' for all timers, '*.service' for all services, '*.mount for all mounts, '*.socket' for all sockets."`
-	Verbose bool     `json:"verbose" jsonschema:"Set to true for more detail. Otherwise set to false."`
+	Verbose bool     `json:"verbose,omitempty" jsonschema:"Set to true for more detail. Otherwise set to false."`
 }
 
 /*
@@ -236,9 +236,9 @@ func (conn *Connection) ListStatesHandler(ctx context.Context) (lst []string, er
 
 type RestartReloadParams struct {
 	Name         string `json:"name" jsonschema:"Exact name of unit to restart"`
-	TimeOut      uint   `json:"timeout" jsonschema:"Time to wait for the restart or reload to finish. After the timeout the function will return and restart and reload will run in the background and the result can be retreived with a separate function."`
-	Mode         string `json:"mode" jsonschema:"Mode used for the restart or reload. 'replace' should be used."`
-	Forcerestart bool   `json:"forcerestart" jsonschema:"mode of the operation. 'replace' should be used per default and replace allready queued jobs. With 'fail' the operation will fail if other operations are in progress."`
+	TimeOut      uint   `json:"timeout,omitempty" jsonschema:"Time to wait for the restart or reload to finish. After the timeout the function will return and restart and reload will run in the background and the result can be retreived with a separate function."`
+	Mode         string `json:"mode,omitempty" jsonschema:"Mode used for the restart or reload. 'replace' should be used."`
+	Forcerestart bool   `json:"forcerestart,omitempty" jsonschema:"mode of the operation. 'replace' should be used per default and replace allready queued jobs. With 'fail' the operation will fail if other operations are in progress."`
 }
 
 // return which are define in the upstream documentation as:
@@ -316,7 +316,7 @@ func (conn *Connection) StartUnit(ctx context.Context, req *mcp.CallToolRequest,
 }
 
 type CheckReloadRestartParams struct {
-	TimeOut uint `json:"timeout" jsonschema:"Time to wait for the restart or reload to finish. After the timeout the function will return and restart and reload will run in the background and the result can be retreived with a separate function."`
+	TimeOut uint `json:"timeout,omitempty" jsonschema:"Time to wait for the restart or reload to finish. After the timeout the function will return and restart and reload will run in the background and the result can be retreived with a separate function."`
 }
 
 // check status of reload or restart
@@ -351,9 +351,9 @@ func (conn *Connection) CheckForRestartReloadRunning(ctx context.Context, req *m
 
 type StopParams struct {
 	Name    string `json:"name" jsonschema:"Exact name of unit to stop"`
-	TimeOut uint   `json:"timeout" jsonschema:"Time to wait for the stop to finish. After the timeout the function will return and stop run in the background and the result can be retreived with a separate function."`
-	Mode    string `json:"mode" jsonschema:"mode of the operation. 'replace' should be used per default and replace allready queued jobs. With 'fail' the operation will fail if other operations are in progress."`
-	Kill    bool   `json:"kill" jsonschema:"Kill the unit instead of shutting down cleanly. Use this option only if the unit doesn't shut down, even after waiting."`
+	TimeOut uint   `json:"timeout,omitempty" jsonschema:"Time to wait for the stop to finish. After the timeout the function will return and stop run in the background and the result can be retreived with a separate function."`
+	Mode    string `json:"mode,omitempty" jsonschema:"mode of the operation. 'replace' should be used per default and replace allready queued jobs. With 'fail' the operation will fail if other operations are in progress."`
+	Kill    bool   `json:"kill,omitempty" jsonschema:"Kill the unit instead of shutting down cleanly. Use this option only if the unit doesn't shut down, even after waiting."`
 }
 
 // Stop or kill the given unit
@@ -382,7 +382,7 @@ func (conn *Connection) StopUnit(ctx context.Context, req *mcp.CallToolRequest, 
 
 type EnableParams struct {
 	File    string `json:"file" jsonschema:"Name of the service or unit if the unit is in the standard location. Takes the absolute path if the unit or service is not placed under '/etc/' or '/usr/lib/systemd'. Does not take wildcards. For the service foo, this would be 'foo.service' if foo is installed by a package."`
-	Disable bool   `json"disable" jsonschema:"Set to true to disable the unit instead of enable."`
+	Disable bool   `json:"disable,omitempty" jsonschema:"Set to true to disable the unit instead of enable."`
 }
 
 func (conn *Connection) EnableDisableUnit(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
@@ -472,7 +472,7 @@ func (conn *Connection) DisableUnit(ctx context.Context, req *mcp.CallToolReques
 }
 
 type ListUnitFilesParams struct {
-	Type []string `json:"types" jsonschema:"List of the type which should be returned."`
+	Type []string `json:"types,omitempty" jsonschema:"List of the type which should be returned."`
 }
 
 // returns the unit files known to systemd
