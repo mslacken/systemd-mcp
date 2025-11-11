@@ -209,6 +209,36 @@ func main() {
 			},
 		})
 	}
+	if AuthKeeper != nil {
+		tools = append(tools, struct {
+			Tool     *mcp.Tool
+			Register func(server *mcp.Server, tool *mcp.Tool)
+		}{
+			Tool: &mcp.Tool{
+				Name:        "is_read_authorized",
+				Description: "Checks if read access is authorized via Polkit.",
+			},
+			Register: func(server *mcp.Server, tool *mcp.Tool) {
+				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *dbus.ReadAuthArgs) (*mcp.CallToolResult, any, error) {
+					return AuthKeeper.IsReadAuthorized(ctx, req, args)
+				})
+			},
+		})
+		tools = append(tools, struct {
+			Tool     *mcp.Tool
+			Register func(server *mcp.Server, tool *mcp.Tool)
+		}{
+			Tool: &mcp.Tool{
+				Name:        "is_write_authorized",
+				Description: "Checks if read access is authorized via Polkit.",
+			},
+			Register: func(server *mcp.Server, tool *mcp.Tool) {
+				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *dbus.ReadAuthArgs) (*mcp.CallToolResult, any, error) {
+					return AuthKeeper.IsWriteAuthorized(ctx, req, args)
+				})
+			},
+		})
+	}
 
 	var allTools []string
 	for _, tool := range tools {
