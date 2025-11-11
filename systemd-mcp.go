@@ -11,6 +11,7 @@ import (
 
 	"github.com/cheynewallace/tabby"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openSUSE/systemd-mcp/internal/dbus"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/systemd"
 	"github.com/spf13/pflag"
@@ -32,6 +33,14 @@ func main() {
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
 	viper.BindPFlags(pflag.CommandLine)
+
+	AuthKeeper, err := dbus.SetupDBus()
+	if err != nil {
+		slog.Warn("failed to setup dbus, continuing without it", "error", err)
+	}
+	if AuthKeeper != nil {
+		defer AuthKeeper.Close()
+	}
 
 	logLevel := slog.LevelInfo
 	if viper.GetBool("verbose") {
