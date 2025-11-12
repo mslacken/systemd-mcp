@@ -6,10 +6,13 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/cheynewallace/tabby"
+	godbus "github.com/godbus/dbus/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openSUSE/systemd-mcp/internal/dbus"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
@@ -17,6 +20,37 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
+
+func authorize() {
+	conn, err := godbus.ConnectSystemBus()
+	if err != nil {
+		slog.Error("failed to connect to system bus", "error", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	obj := conn.Object(dbus.DBusName, dbus.DBusPath)
+	if viper.GetBool("allow-read") {
+		call := obj.Call("org.opensuse.systemdmcp.AuthRead", 0)
+		if call.Err != nil {
+			slog.Error("failed to authorize read", "error", call.Err)
+			os.Exit(1)
+		}
+		slog.Info("Read access authorized")
+	}
+	if viper.GetBool("allow-write") {
+		call := obj.Call("org.opensuse.systemdmcp.AuthWrite", 0)
+		if call.Err != nil {
+			slog.Error("failed to authorize write", "error", call.Err)
+			os.Exit(1)
+		}
+		slog.Info("Write access authorized")
+	}
+	slog.Info("Press Ctrl+C to exit and cancel authorizations.")
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	<-sigs
+}
 
 func main() {
 	// DO NOT SET DEFAULTS HERE
@@ -26,6 +60,8 @@ func main() {
 	pflag.BoolP("debug", "d", false, "Enable debug logging")
 	pflag.Bool("log-json", false, "Output logs in JSON format (machine-readable)")
 	pflag.Bool("list-tools", false, "List all available tools and exit")
+	pflag.BoolP("allow-write", "w", false, "Authorize write to systemd or allow pending write if started without write")
+	pflag.BoolP("allow-read", "r", false, "Authorize read to systemd or allow pending read if started without read")
 	pflag.StringSlice("enabled-tools", nil, "A list of tools to enable. Defaults to all tools.")
 
 	pflag.Parse()
@@ -33,15 +69,6 @@ func main() {
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
 	viper.BindPFlags(pflag.CommandLine)
-
-	AuthKeeper, err := dbus.SetupDBus()
-	if err != nil {
-		slog.Warn("failed to setup dbus, continuing without it", "error", err)
-	}
-	if AuthKeeper != nil {
-		defer AuthKeeper.Close()
-	}
-
 	logLevel := slog.LevelInfo
 	if viper.GetBool("verbose") {
 		logLevel = slog.LevelInfo
@@ -71,6 +98,26 @@ func main() {
 		logger = slog.New(slog.NewTextHandler(logOutput, handlerOpts))
 	}
 	slog.SetDefault(logger)
+
+	if viper.GetBool("allow-read") || viper.GetBool("allow-write") {
+		taken, err := dbus.IsDBusNameTaken()
+		if err != nil {
+			slog.Error("could not check if dbus name is taken", "error", err)
+			os.Exit(1)
+		}
+		if !taken {
+			slog.Error("systemd-mcp is not running with the --allow flag")
+			os.Exit(1)
+		}
+		authorize()
+		os.Exit(0)
+	}
+	AuthKeeper, err := dbus.SetupDBus()
+	if err != nil {
+		slog.Error("failed to setup dbus", "error", err)
+		os.Exit(1)
+	}
+	defer AuthKeeper.Close()
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",

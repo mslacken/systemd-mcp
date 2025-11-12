@@ -12,6 +12,34 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+const (
+	DBusName = "org.opensuse.systemdmcp"
+	DBusPath = "/org/opensuse/systemdmcp"
+)
+
+// IsDBusNameTaken checks if the dbus name is already taken.
+func IsDBusNameTaken() (bool, error) {
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return false, fmt.Errorf("could not connect to system dbus: %w", err)
+	}
+	defer conn.Close()
+
+	var names []string
+	err = conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&names)
+	if err != nil {
+		return false, err
+	}
+
+	for _, n := range names {
+		if n == DBusName {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 type AuthKeeper struct {
 	*dbus.Conn
 	sender       dbus.Sender
@@ -90,30 +118,30 @@ func SetupDBus() (*AuthKeeper, error) {
 		Timeout: 5,
 	}
 
-	const intro = `
+	intro := `
 <node>
-	<interface name="org.opensuse.systemdmcp">
+	<interface name="` + DBusName + `">
 		<method name="AuthRead">
 		</method>
 		<method name="AuthWrite">
 		</method>
 </interface>` + introspect.IntrospectDataString + `</node> `
 
-	conn.Export(keeper, "/org/opensuse/systemdmcp", "org.opensuse.systemdmcp")
-	conn.Export(introspect.Introspectable(intro), "/org/opensuse/systemdmcp", "org.freedesktop.DBus.Introspectable")
+	conn.Export(keeper, DBusPath, DBusName)
+	conn.Export(introspect.Introspectable(intro), DBusPath, "org.freedesktop.DBus.Introspectable")
 
-	reply, err := conn.RequestName("org.opensuse.systemdmcp", dbus.NameFlagDoNotQueue)
+	reply, err := conn.RequestName(DBusName, dbus.NameFlagDoNotQueue)
 	if err != nil {
 		slog.Warn("could not request dbus name", "error", err)
 		conn.Close()
 		return nil, err
 	}
 	if reply != dbus.RequestNameReplyPrimaryOwner {
-		slog.Warn("dbus name already taken", "name", "org.opensuse.systemdmcp")
+		slog.Warn("dbus name already taken", "name", DBusName)
 		conn.Close()
 		return nil, fmt.Errorf("dbus name already taken")
 	}
-	slog.Info("Listening on dbus", "name", "org.opensuse.systemdmcp")
+	slog.Info("Listening on dbus", "name", DBusName)
 	return keeper, nil
 }
 
