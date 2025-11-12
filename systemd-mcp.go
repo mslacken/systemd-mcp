@@ -6,15 +6,25 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/cheynewallace/tabby"
+	godbus "github.com/godbus/dbus/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/systemd"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+)
+
+const (
+	DBusName = "org.opensuse.systemdmcp"
+	DBusPath = "/org/opensuse/systemdmcp"
 )
 
 func main() {
@@ -25,14 +35,19 @@ func main() {
 	pflag.BoolP("debug", "d", false, "Enable debug logging")
 	pflag.Bool("log-json", false, "Output logs in JSON format (machine-readable)")
 	pflag.Bool("list-tools", false, "List all available tools and exit")
+	pflag.BoolP("allow-write", "w", false, "Authorize write to systemd or allow pending write if started without write")
+	pflag.BoolP("allow-read", "r", false, "Authorize read to systemd or allow pending read if started without read")
+	pflag.BoolP("auth-register", "a", false, "Register for auth call backs")
 	pflag.StringSlice("enabled-tools", nil, "A list of tools to enable. Defaults to all tools.")
+	pflag.Uint32("timeout", 5, "Set the timeout for authentication in seconds")
+	pflag.Bool("noauth", false, "Disable authorization via dbus and always allow read and write access")
+	pflag.Bool("internal-agent", false, "Starts pkttyagent for authorization")
 
 	pflag.Parse()
 	viper.SetEnvPrefix("SYSTEMD_MCP")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
 	viper.BindPFlags(pflag.CommandLine)
-
 	logLevel := slog.LevelInfo
 	if viper.GetBool("verbose") {
 		logLevel = slog.LevelInfo
@@ -63,11 +78,117 @@ func main() {
 	}
 	slog.SetDefault(logger)
 
+	if (viper.GetBool("allow-read") || viper.GetBool("allow-write") || viper.GetBool("auth-register") || viper.GetBool("internal-agent")) && !viper.GetBool("noauth") {
+		taken, err := dbus.IsDBusNameTaken(DBusName)
+		if err != nil {
+			slog.Error("could not check if dbus name is taken", "error", err)
+			os.Exit(1)
+		}
+		if taken {
+			conn, err := godbus.ConnectSystemBus()
+			if err != nil {
+				slog.Error("failed to connect to system bus", "error", err)
+				os.Exit(1)
+			}
+			defer conn.Close()
+
+			obj := conn.Object(DBusName, DBusPath)
+			if viper.GetBool("allow-read") {
+				call := obj.Call(DBusName+".AuthRead", 0)
+				if call.Err != nil {
+					slog.Error("failed to authorize read", "error", call.Err)
+					os.Exit(1)
+				}
+				slog.Info("Read access authorized")
+			}
+			if viper.GetBool("allow-write") {
+				call := obj.Call(DBusName+".AuthWrite", 0)
+				if call.Err != nil {
+					slog.Error("failed to authorize write", "error", call.Err)
+					os.Exit(1)
+				}
+				slog.Info("Write access authorized")
+			}
+			if viper.GetBool("auth-register") || viper.GetBool("internal-agent") {
+				call := obj.Call(DBusName+".AuthRegister", 0)
+				if call.Err != nil {
+					slog.Error("failed to register for auth call backs", "error", call.Err)
+					os.Exit(1)
+				}
+				slog.Info("Registered for auth call backs")
+			}
+			if viper.GetBool("internal-agent") {
+				cmd := exec.Command("pkttyagent", "--process", fmt.Sprintf("%d", os.Getpid()))
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				cmd.Stdin = os.Stdin
+				if err := cmd.Run(); err != nil {
+					slog.Error("pkttyagent failed", "error", err)
+					os.Exit(1)
+				}
+			} else {
+				slog.Info("Press Ctrl+C to exit and cancel authorizations.")
+				sigs := make(chan os.Signal, 1)
+				signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+				<-sigs
+			}
+			os.Exit(0)
+		}
+	}
+	// elevate if not running as root
+	if os.Geteuid() != 0 {
+		exe, err := os.Executable()
+		if err != nil {
+			slog.Error("could not find executable path", "error", err)
+			os.Exit(1)
+		}
+
+		slog.Info("Not running as root, attempting to elevate privileges with pkexec.")
+
+		cmd := exec.Command("pkexec", append([]string{exe}, os.Args[1:]...)...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+
+		err = cmd.Run()
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				// pkexec returns 127 if command not found, 126 if user cancels.
+				if exitErr.ExitCode() == 126 {
+					slog.Error("Authorization cancelled by user.")
+				} else {
+					slog.Error("failed to elevate privileges", "error", err)
+				}
+				os.Exit(exitErr.ExitCode())
+			} else {
+				slog.Error("failed to execute pkexec", "error", err)
+				os.Exit(1)
+			}
+		}
+		os.Exit(0)
+	}
+	AuthKeeper := &dbus.AuthKeeper{}
+	if !viper.GetBool("noauth") {
+		var err error
+		AuthKeeper, err = dbus.SetupDBus(DBusName, DBusPath)
+		if err != nil {
+			slog.Error("failed to setup dbus", "error", err)
+			os.Exit(1)
+		}
+		AuthKeeper.Timeout = viper.GetUint32("timeout")
+		AuthKeeper.ReadAllowed = viper.GetBool("allow-read")
+		AuthKeeper.WriteAllowed = viper.GetBool("allow-write")
+		defer AuthKeeper.Close()
+	} else {
+		AuthKeeper.ReadAllowed = true
+		AuthKeeper.WriteAllowed = true
+	}
+
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
-		Version: "0.0.1",
+		Version: "0.1.0",
 	}, nil)
-	systemConn, err := systemd.NewSystem(context.Background())
+	systemConn, err := systemd.NewSystem(context.Background(), AuthKeeper)
 	if err != nil {
 		slog.Warn("couldn't add systemd tools", slog.Any("error", err))
 	}
@@ -183,7 +304,7 @@ func main() {
 	if os.Geteuid() != 0 {
 		descriptionJournal += "Please note that this tool is not running as root, so system resources may not be listed correctly."
 	}
-	log, err := journal.NewLog()
+	log, err := journal.NewLog(AuthKeeper)
 	if err != nil {
 		slog.Warn("couldn't open log, not adding journal tool", slog.Any("error", err))
 	} else {
@@ -196,7 +317,10 @@ func main() {
 				Description: descriptionJournal,
 			},
 			Register: func(server *mcp.Server, tool *mcp.Tool) {
-				mcp.AddTool(server, tool, log.ListLog)
+				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *journal.ListLogParams) (*mcp.CallToolResult, any, error) {
+					slog.Debug("list_log called", "args", args)
+					return log.ListLog(ctx, req, args)
+				})
 			},
 		})
 	}

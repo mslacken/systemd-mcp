@@ -38,6 +38,7 @@ dist: build vendor
 	tar -czvf $(GO_BIN).tar.gz $(GO_BIN) vendor
 
 install: build
-	install -d -m 0755 "$(DESTDIR)$(PREFIX)/bin"
-	install -m 0755 "$(GO_BIN)" "$(DESTDIR)$(PREFIX)/bin/$(GO_BIN)"
+	install -m 0755 ${BINARY_NAME} /usr/local/bin/
+	install -m 0644 configs/org.opensuse.systemd-mcp.policy /usr/share/polkit-1/actions/
+	install -m 0644 configs/org.opensuse.systemd-mcp.conf /usr/share/dbus-1/system.d/
 
