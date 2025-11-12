@@ -117,6 +117,12 @@ func (a *AuthKeeper) AuthWrite(sender dbus.Sender) *dbus.Error {
 	return err
 }
 
+// Just register the sender for further call backs
+func (a *AuthKeeper) AuthRegister(sender dbus.Sender) *dbus.Error {
+	a.sender = sender
+	return nil
+}
+
 // setup the dbus authorization call back. Creates AuthWrite and
 // AuthRead dbus methods so that authorization can be done by
 // another process calliing this methods.
@@ -140,6 +146,9 @@ func SetupDBus(dbusName, dbusPath string) (*AuthKeeper, error) {
 		<method name="AuthRead">
 		</method>
 		<method name="AuthWrite">
+		</method>
+		<method name="AuthRegister">
+		<!-- Register so that polkit knows whom to call back -->
 		</method>
 </interface>` + introspect.IntrospectDataString + `</node> `
 

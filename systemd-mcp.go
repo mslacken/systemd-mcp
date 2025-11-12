@@ -37,8 +37,11 @@ func main() {
 	pflag.Bool("list-tools", false, "List all available tools and exit")
 	pflag.BoolP("allow-write", "w", false, "Authorize write to systemd or allow pending write if started without write")
 	pflag.BoolP("allow-read", "r", false, "Authorize read to systemd or allow pending read if started without read")
+	pflag.BoolP("auth-register", "a", false, "Register for auth call backs")
 	pflag.StringSlice("enabled-tools", nil, "A list of tools to enable. Defaults to all tools.")
 	pflag.Uint32("timeout", 5, "Set the timeout for authentication in seconds")
+	pflag.Bool("noauth", false, "Disable authorization via dbus and always allow read and write access")
+	pflag.Bool("internal-agent", false, "Starts pkttyagent for authorization")
 
 	pflag.Parse()
 	viper.SetEnvPrefix("SYSTEMD_MCP")
@@ -75,7 +78,7 @@ func main() {
 	}
 	slog.SetDefault(logger)
 
-	if viper.GetBool("allow-read") || viper.GetBool("allow-write") {
+	if (viper.GetBool("allow-read") || viper.GetBool("allow-write") || viper.GetBool("auth-register") || viper.GetBool("internal-agent")) && !viper.GetBool("noauth") {
 		taken, err := dbus.IsDBusNameTaken(DBusName)
 		if err != nil {
 			slog.Error("could not check if dbus name is taken", "error", err)
@@ -106,10 +109,29 @@ func main() {
 				}
 				slog.Info("Write access authorized")
 			}
-			slog.Info("Press Ctrl+C to exit and cancel authorizations.")
-			sigs := make(chan os.Signal, 1)
-			signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-			<-sigs
+			if viper.GetBool("auth-register") || viper.GetBool("internal-agent") {
+				call := obj.Call(DBusName+".AuthRegister", 0)
+				if call.Err != nil {
+					slog.Error("failed to register for auth call backs", "error", call.Err)
+					os.Exit(1)
+				}
+				slog.Info("Registered for auth call backs")
+			}
+			if viper.GetBool("internal-agent") {
+				cmd := exec.Command("pkttyagent", "--process", fmt.Sprintf("%d", os.Getpid()))
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				cmd.Stdin = os.Stdin
+				if err := cmd.Run(); err != nil {
+					slog.Error("pkttyagent failed", "error", err)
+					os.Exit(1)
+				}
+			} else {
+				slog.Info("Press Ctrl+C to exit and cancel authorizations.")
+				sigs := make(chan os.Signal, 1)
+				signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+				<-sigs
+			}
 			os.Exit(0)
 		}
 	}
@@ -145,15 +167,22 @@ func main() {
 		}
 		os.Exit(0)
 	}
-	AuthKeeper, err := dbus.SetupDBus(DBusName, DBusPath)
-	if err != nil {
-		slog.Error("failed to setup dbus", "error", err)
-		os.Exit(1)
+	AuthKeeper := &dbus.AuthKeeper{}
+	if !viper.GetBool("noauth") {
+		var err error
+		AuthKeeper, err = dbus.SetupDBus(DBusName, DBusPath)
+		if err != nil {
+			slog.Error("failed to setup dbus", "error", err)
+			os.Exit(1)
+		}
+		AuthKeeper.Timeout = viper.GetUint32("timeout")
+		AuthKeeper.ReadAllowed = viper.GetBool("allow-read")
+		AuthKeeper.WriteAllowed = viper.GetBool("allow-write")
+		defer AuthKeeper.Close()
+	} else {
+		AuthKeeper.ReadAllowed = true
+		AuthKeeper.WriteAllowed = true
 	}
-	AuthKeeper.Timeout = viper.GetUint32("timeout")
-	AuthKeeper.ReadAllowed = viper.GetBool("allow-read")
-	AuthKeeper.WriteAllowed = viper.GetBool("allow-write")
-	defer AuthKeeper.Close()
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
