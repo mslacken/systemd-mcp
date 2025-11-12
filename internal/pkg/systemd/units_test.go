@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/coreos/go-systemd/v22/dbus"
+	dbus_pkg "github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 )
@@ -143,6 +144,9 @@ func TestListUnitHandlerNameState(t *testing.T) {
 				dbus: &mockDbusConnection{
 					listUnitsByPatterns: tt.mockListUnits,
 					getAllProperties:    tt.mockGetProps,
+				},
+				auth: &dbus_pkg.AuthKeeper{
+					ReadAllowed: true,
 				},
 			}
 

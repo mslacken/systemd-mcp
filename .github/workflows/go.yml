@@ -24,8 +24,11 @@ jobs:
       with:
         go-version: '1.24.0'
 
+    - name: Vendor
+      run: go mod vendor
+
     - name: Build
-      run: go build -v ./...
+      run: go build -mod=vendor -v ./...
 
     - name: Test
-      run: go test -v ./...
+      run: go test -mod=vendor -v ./...
