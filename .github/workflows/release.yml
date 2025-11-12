@@ -21,6 +21,8 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: '1.24.0'
+      - name: Vendor
+        run: go mod vendor
       - id: binary-build
         run: |
           make build
