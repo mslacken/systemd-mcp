@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"slices"
 	"strings"
@@ -63,6 +64,7 @@ func main() {
 	pflag.BoolP("allow-write", "w", false, "Authorize write to systemd or allow pending write if started without write")
 	pflag.BoolP("allow-read", "r", false, "Authorize read to systemd or allow pending read if started without read")
 	pflag.StringSlice("enabled-tools", nil, "A list of tools to enable. Defaults to all tools.")
+	pflag.Uint32("timeout", 5, "Set the timeout for authentication in seconds")
 
 	pflag.Parse()
 	viper.SetEnvPrefix("SYSTEMD_MCP")
@@ -99,6 +101,38 @@ func main() {
 	}
 	slog.SetDefault(logger)
 
+	if os.Geteuid() != 0 && !(viper.GetBool("allow-read") || viper.GetBool("allow-write")) {
+		exe, err := os.Executable()
+		if err != nil {
+			slog.Error("could not find executable path", "error", err)
+			os.Exit(1)
+		}
+
+		slog.Info("Not running as root, attempting to elevate privileges with pkexec.")
+
+		cmd := exec.Command("pkexec", append([]string{exe}, os.Args[1:]...)...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+
+		err = cmd.Run()
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				// pkexec returns 127 if command not found, 126 if user cancels.
+				if exitErr.ExitCode() == 126 {
+					slog.Error("Authorization cancelled by user.")
+				} else {
+					slog.Error("failed to elevate privileges", "error", err)
+				}
+				os.Exit(exitErr.ExitCode())
+			} else {
+				slog.Error("failed to execute pkexec", "error", err)
+				os.Exit(1)
+			}
+		}
+		os.Exit(0)
+	}
+
 	if viper.GetBool("allow-read") || viper.GetBool("allow-write") {
 		taken, err := dbus.IsDBusNameTaken()
 		if err != nil {
@@ -106,7 +140,7 @@ func main() {
 			os.Exit(1)
 		}
 		if !taken {
-			slog.Error("systemd-mcp is not running with the --allow flag")
+			slog.Error("systemd-mcp is allredy running")
 			os.Exit(1)
 		}
 		authorize()
@@ -117,13 +151,14 @@ func main() {
 		slog.Error("failed to setup dbus", "error", err)
 		os.Exit(1)
 	}
+	AuthKeeper.Timeout = viper.GetUint32("timeout")
 	defer AuthKeeper.Close()
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
 		Version: "0.0.1",
 	}, nil)
-	systemConn, err := systemd.NewSystem(context.Background())
+	systemConn, err := systemd.NewSystem(context.Background(), AuthKeeper)
 	if err != nil {
 		slog.Warn("couldn't add systemd tools", slog.Any("error", err))
 	}

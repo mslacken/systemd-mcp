@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/coreos/go-systemd/v22/dbus"
+	auth "github.com/openSUSE/systemd-mcp/internal/dbus"
 )
 
 // DbusConnection is an interface that abstracts the dbus connection.
@@ -28,6 +29,7 @@ type DbusConnection interface {
 type Connection struct {
 	rchannel chan string
 	dbus     DbusConnection
+	auth     *auth.AuthKeeper
 }
 
 // opens a new user connection to the dbus
@@ -39,8 +41,9 @@ func NewUser(ctx context.Context) (conn *Connection, err error) {
 	}
 	return conn, err
 }
-func NewSystem(ctx context.Context) (conn *Connection, err error) {
+func NewSystem(ctx context.Context, auth *auth.AuthKeeper) (conn *Connection, err error) {
 	conn = new(Connection)
+	conn.auth = auth
 	conn.dbus, err = dbus.NewSystemConnectionContext(ctx)
 	if err != nil {
 		return nil, err
