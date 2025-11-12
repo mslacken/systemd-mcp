@@ -186,7 +186,7 @@ func main() {
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
-		Version: "0.0.1",
+		Version: "0.1.0",
 	}, nil)
 	systemConn, err := systemd.NewSystem(context.Background(), AuthKeeper)
 	if err != nil {
