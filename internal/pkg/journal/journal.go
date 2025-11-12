@@ -9,19 +9,21 @@ import (
 
 	"github.com/coreos/go-systemd/v22/sdjournal"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	auth "github.com/openSUSE/systemd-mcp/dbus"
 )
 
 type HostLog struct {
 	journal *sdjournal.Journal
+	auth    *auth.AuthKeeper
 }
 
 // NewLog instance creates a new HostLog instance
-func NewLog() (*HostLog, error) {
+func NewLog(auth *auth.AuthKeeper) (*HostLog, error) {
 	j, err := sdjournal.NewJournal()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open journal: %w", err)
 	}
-	return &HostLog{journal: j}, nil
+	return &HostLog{journal: j, auth: auth}, nil
 }
 
 // Close the log and underlying journal
@@ -75,8 +77,15 @@ func (sj *HostLog) ListLogTimeout(ctx context.Context, req *mcp.CallToolRequest,
 
 // get the lat log entries for a given unit, else just the last messages
 func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
+	allowed, err := sj.auth.IsReadAuthorized()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
 	if params.Unit != "" {
-    sj.journal.FlushMatches()
+		sj.journal.FlushMatches()
 		if err := sj.journal.AddMatch("SYSLOG_IDENTIFIER=" + params.Unit); err != nil {
 			return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
 		}
@@ -86,7 +95,7 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		}
 		if seek == 0 {
 			sj.journal.FlushMatches()
-      if err := sj.journal.AddMatch("_SYSTEMD_USER_UNIT=" + params.Unit); err != nil {
+			if err := sj.journal.AddMatch("_SYSTEMD_USER_UNIT=" + params.Unit); err != nil {
 				return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
 			}
 			seek, err := sj.seekAndSkip(uint64(params.Count))

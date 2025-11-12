@@ -67,13 +67,19 @@ type ListUnitParams struct {
 
 func (conn *Connection) ListUnitState(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitParams) (*mcp.CallToolResult, any, error) {
 	slog.Debug("ListUnitState called", "params", params)
-	var err error
+	allowed, err := conn.auth.IsReadAuthorized()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
 	reqState := params.State
 	if reqState == "" {
 		reqState = "running"
 	} else {
 		if !slices.Contains(ValidStates(), reqState) {
-			return nil, nil, fmt.Errorf("requsted state %s is not a valid state", reqState)
+			return nil, nil, fmt.Errorf("requested state %s is not a valid state", reqState)
 		}
 	}
 	var units []dbus.UnitStatus
@@ -129,7 +135,13 @@ Handler to list the unit by name
 */
 func (conn *Connection) ListUnitHandlerNameState(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitNameParams) (*mcp.CallToolResult, any, error) {
 	slog.Debug("ListUnitHandlerNameState called", "params", params)
-	var err error
+	allowed, err := conn.auth.IsReadAuthorized()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
 	reqNames := params.Names
 	// reqStates := request.GetStringSlice("states", []string{""})
 	var units []dbus.UnitStatus
@@ -278,6 +290,13 @@ func GetRestsartReloadParamsSchema() (*jsonschema.Schema, error) {
 // restart or reload a service
 func (conn *Connection) RestartReloadUnit(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("RestartReloadUnit called", "params", params)
+	allowed, err := conn.auth.IsWriteAuthorized()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
 	if params.Mode == "" {
 		params.Mode = "replace"
 	}
@@ -302,6 +321,13 @@ func (conn *Connection) RestartReloadUnit(ctx context.Context, req *mcp.CallTool
 
 func (conn *Connection) StartUnit(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("StartUnit called", "params", params)
+	allowed, err := conn.auth.IsWriteAuthorized()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
 	if params.Mode == "" {
 		params.Mode = "replace"
 	}
@@ -327,6 +353,13 @@ type CheckReloadRestartParams struct {
 // check status of reload or restart
 func (conn *Connection) CheckForRestartReloadRunning(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("CheckForRestartReloadRunning called", "params", params)
+	allowed, err := conn.auth.IsWriteAuthorized()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
 	select {
 	case result := <-conn.rchannel:
 		return &mcp.CallToolResult{
@@ -365,6 +398,13 @@ type StopParams struct {
 // Stop or kill the given unit
 func (conn *Connection) StopUnit(ctx context.Context, req *mcp.CallToolRequest, params *StopParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("StopUnit called", "params", params)
+	allowed, err := conn.auth.IsWriteAuthorized()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
 	if params.Mode == "" {
 		params.Mode = "replace"
 	}
@@ -394,6 +434,13 @@ type EnableParams struct {
 
 func (conn *Connection) EnableDisableUnit(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("EnableDisableUnit called", "params", params)
+	allowed, err := conn.auth.IsWriteAuthorized()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
 	if params.Disable {
 		return conn.DisableUnit(ctx, req, params)
 	} else {
@@ -486,6 +533,13 @@ type ListUnitFilesParams struct {
 // returns the unit files known to systemd
 func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitFilesParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("ListUnitFiles called", "params", params)
+	allowed, err := conn.auth.IsReadAuthorized()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
 	unitList, err := conn.dbus.ListUnitFilesContext(ctx)
 	if err != nil {
 		return nil, nil, err

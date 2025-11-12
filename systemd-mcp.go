@@ -275,7 +275,7 @@ func main() {
 	if os.Geteuid() != 0 {
 		descriptionJournal += "Please note that this tool is not running as root, so system resources may not be listed correctly."
 	}
-	log, err := journal.NewLog()
+	log, err := journal.NewLog(AuthKeeper)
 	if err != nil {
 		slog.Warn("couldn't open log, not adding journal tool", slog.Any("error", err))
 	} else {
@@ -291,38 +291,6 @@ func main() {
 				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *journal.ListLogParams) (*mcp.CallToolResult, any, error) {
 					slog.Debug("list_log called", "args", args)
 					return log.ListLog(ctx, req, args)
-				})
-			},
-		})
-	}
-	if AuthKeeper != nil {
-		tools = append(tools, struct {
-			Tool     *mcp.Tool
-			Register func(server *mcp.Server, tool *mcp.Tool)
-		}{
-			Tool: &mcp.Tool{
-				Name:        "is_read_authorized",
-				Description: "Checks if read access is authorized via Polkit.",
-			},
-			Register: func(server *mcp.Server, tool *mcp.Tool) {
-				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *dbus.ReadAuthArgs) (*mcp.CallToolResult, any, error) {
-					slog.Debug("is_read_authorized called", "args", args)
-					return AuthKeeper.IsReadAuthorizedTool(ctx, req, args)
-				})
-			},
-		})
-		tools = append(tools, struct {
-			Tool     *mcp.Tool
-			Register func(server *mcp.Server, tool *mcp.Tool)
-		}{
-			Tool: &mcp.Tool{
-				Name:        "is_write_authorized",
-				Description: "Checks if read access is authorized via Polkit.",
-			},
-			Register: func(server *mcp.Server, tool *mcp.Tool) {
-				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *dbus.ReadAuthArgs) (*mcp.CallToolResult, any, error) {
-					slog.Debug("is_write_authorized called", "args", args)
-					return AuthKeeper.IsWriteAuthorizedTool(ctx, req, args)
 				})
 			},
 		})

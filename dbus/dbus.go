@@ -14,6 +14,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// gets executable for nicer error messages
 func getExecutableName() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -48,10 +49,10 @@ func IsDBusNameTaken(dbusName string) (bool, error) {
 
 type AuthKeeper struct {
 	*dbus.Conn
-	sender       dbus.Sender
+	sender       dbus.Sender // store the sender which authorized the last call
 	Timeout      uint32
-	ReadAllowed  bool
-	WriteAllowed bool
+	ReadAllowed  bool // allow read without auth
+	WriteAllowed bool // allow write without auth
 	DbusName     string
 	DbusPath     string
 }
@@ -98,6 +99,7 @@ func checkAuth(conn *dbus.Conn, sender dbus.Sender, actionID string) (bool, *dbu
 	return true, nil
 }
 
+// read authorization method exposed to dbus
 func (a *AuthKeeper) AuthRead(sender dbus.Sender) *dbus.Error {
 	_, err := checkAuth(a.Conn, sender, a.DbusName+".AuthRead")
 	if err == nil {
@@ -106,6 +108,7 @@ func (a *AuthKeeper) AuthRead(sender dbus.Sender) *dbus.Error {
 	return err
 }
 
+// write authorization method exposed to dbus
 func (a *AuthKeeper) AuthWrite(sender dbus.Sender) *dbus.Error {
 	_, err := checkAuth(a.Conn, sender, a.DbusName+".AuthWrite")
 	if err == nil {
@@ -114,6 +117,9 @@ func (a *AuthKeeper) AuthWrite(sender dbus.Sender) *dbus.Error {
 	return err
 }
 
+// setup the dbus authorization call back. Creates AuthWrite and
+// AuthRead dbus methods so that authorization can be done by
+// another process calliing this methods.
 func SetupDBus(dbusName, dbusPath string) (*AuthKeeper, error) {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
@@ -155,6 +161,8 @@ func SetupDBus(dbusName, dbusPath string) (*AuthKeeper, error) {
 	return keeper, nil
 }
 
+// Check if read was authorized. Triggers also a call back via
+// dbus if read was authorized at another time
 func (a *AuthKeeper) IsReadAuthorized() (bool, error) {
 	if a.ReadAllowed {
 		return true, nil
@@ -179,6 +187,8 @@ func (a *AuthKeeper) IsReadAuthorized() (bool, error) {
 	return false, fmt.Errorf("authorize reading by calling: %s --allow-read", getExecutableName())
 }
 
+// Check if write was authorized. Triggers also a call back via
+// dbus if write was authorized at another time
 func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
 	if a.WriteAllowed {
 		return true, nil
@@ -209,6 +219,7 @@ type IsAuthorizedResult struct {
 	SenderAuth bool `json:"sender_auth"`
 }
 
+// debug function to check authorization
 func (a *AuthKeeper) IsReadAuthorizedTool(ctx context.Context, req *mcp.CallToolRequest, args *ReadAuthArgs) (*mcp.CallToolResult, any, error) {
 	slog.Debug("IsReadAuthorized called", "args", args)
 	result := &IsAuthorizedResult{}
@@ -226,6 +237,7 @@ func (a *AuthKeeper) IsReadAuthorizedTool(ctx context.Context, req *mcp.CallTool
 		nil, nil
 }
 
+// debug function to check authorization
 func (a *AuthKeeper) IsWriteAuthorizedTool(ctx context.Context, req *mcp.CallToolRequest, args *ReadAuthArgs) (*mcp.CallToolResult, any, error) {
 	slog.Debug("IsWriteAuthorized called", "args", args)
 	result := &IsAuthorizedResult{}
