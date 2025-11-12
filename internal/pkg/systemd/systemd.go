@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/coreos/go-systemd/v22/dbus"
-	auth "github.com/openSUSE/systemd-mcp/internal/dbus"
+	auth "github.com/openSUSE/systemd-mcp/dbus"
 )
 
 // DbusConnection is an interface that abstracts the dbus connection.

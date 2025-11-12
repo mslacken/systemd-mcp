@@ -15,43 +15,17 @@ import (
 	"github.com/cheynewallace/tabby"
 	godbus "github.com/godbus/dbus/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/openSUSE/systemd-mcp/internal/dbus"
+	"github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/systemd"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
-func authorize() {
-	conn, err := godbus.ConnectSystemBus()
-	if err != nil {
-		slog.Error("failed to connect to system bus", "error", err)
-		os.Exit(1)
-	}
-	defer conn.Close()
-
-	obj := conn.Object(dbus.DBusName, dbus.DBusPath)
-	if viper.GetBool("allow-read") {
-		call := obj.Call("org.opensuse.systemdmcp.AuthRead", 0)
-		if call.Err != nil {
-			slog.Error("failed to authorize read", "error", call.Err)
-			os.Exit(1)
-		}
-		slog.Info("Read access authorized")
-	}
-	if viper.GetBool("allow-write") {
-		call := obj.Call("org.opensuse.systemdmcp.AuthWrite", 0)
-		if call.Err != nil {
-			slog.Error("failed to authorize write", "error", call.Err)
-			os.Exit(1)
-		}
-		slog.Info("Write access authorized")
-	}
-	slog.Info("Press Ctrl+C to exit and cancel authorizations.")
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	<-sigs
-}
+const (
+	DBusName = "org.opensuse.systemdmcp"
+	DBusPath = "/org/opensuse/systemdmcp"
+)
 
 func main() {
 	// DO NOT SET DEFAULTS HERE
@@ -101,7 +75,46 @@ func main() {
 	}
 	slog.SetDefault(logger)
 
-	if os.Geteuid() != 0 && !(viper.GetBool("allow-read") || viper.GetBool("allow-write")) {
+	if viper.GetBool("allow-read") || viper.GetBool("allow-write") {
+		taken, err := dbus.IsDBusNameTaken(DBusName)
+		if err != nil {
+			slog.Error("could not check if dbus name is taken", "error", err)
+			os.Exit(1)
+		}
+		if taken {
+			conn, err := godbus.ConnectSystemBus()
+			if err != nil {
+				slog.Error("failed to connect to system bus", "error", err)
+				os.Exit(1)
+			}
+			defer conn.Close()
+
+			obj := conn.Object(DBusName, DBusPath)
+			if viper.GetBool("allow-read") {
+				call := obj.Call(DBusName+".AuthRead", 0)
+				if call.Err != nil {
+					slog.Error("failed to authorize read", "error", call.Err)
+					os.Exit(1)
+				}
+				slog.Info("Read access authorized")
+			}
+			if viper.GetBool("allow-write") {
+				call := obj.Call(DBusName+".AuthWrite", 0)
+				if call.Err != nil {
+					slog.Error("failed to authorize write", "error", call.Err)
+					os.Exit(1)
+				}
+				slog.Info("Write access authorized")
+			}
+			slog.Info("Press Ctrl+C to exit and cancel authorizations.")
+			sigs := make(chan os.Signal, 1)
+			signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+			<-sigs
+			os.Exit(0)
+		}
+	}
+	// elevate if not running as root
+	if os.Geteuid() != 0 {
 		exe, err := os.Executable()
 		if err != nil {
 			slog.Error("could not find executable path", "error", err)
@@ -132,26 +145,14 @@ func main() {
 		}
 		os.Exit(0)
 	}
-
-	if viper.GetBool("allow-read") || viper.GetBool("allow-write") {
-		taken, err := dbus.IsDBusNameTaken()
-		if err != nil {
-			slog.Error("could not check if dbus name is taken", "error", err)
-			os.Exit(1)
-		}
-		if !taken {
-			slog.Error("systemd-mcp is allredy running")
-			os.Exit(1)
-		}
-		authorize()
-		os.Exit(0)
-	}
-	AuthKeeper, err := dbus.SetupDBus()
+	AuthKeeper, err := dbus.SetupDBus(DBusName, DBusPath)
 	if err != nil {
 		slog.Error("failed to setup dbus", "error", err)
 		os.Exit(1)
 	}
 	AuthKeeper.Timeout = viper.GetUint32("timeout")
+	AuthKeeper.ReadAllowed = viper.GetBool("allow-read")
+	AuthKeeper.WriteAllowed = viper.GetBool("allow-write")
 	defer AuthKeeper.Close()
 
 	server := mcp.NewServer(&mcp.Implementation{
@@ -306,7 +307,7 @@ func main() {
 			Register: func(server *mcp.Server, tool *mcp.Tool) {
 				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *dbus.ReadAuthArgs) (*mcp.CallToolResult, any, error) {
 					slog.Debug("is_read_authorized called", "args", args)
-					return AuthKeeper.IsReadAuthorized(ctx, req, args)
+					return AuthKeeper.IsReadAuthorizedTool(ctx, req, args)
 				})
 			},
 		})
@@ -321,7 +322,7 @@ func main() {
 			Register: func(server *mcp.Server, tool *mcp.Tool) {
 				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *dbus.ReadAuthArgs) (*mcp.CallToolResult, any, error) {
 					slog.Debug("is_write_authorized called", "args", args)
-					return AuthKeeper.IsWriteAuthorized(ctx, req, args)
+					return AuthKeeper.IsWriteAuthorizedTool(ctx, req, args)
 				})
 			},
 		})

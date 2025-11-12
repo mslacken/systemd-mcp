@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -12,13 +14,17 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const (
-	DBusName = "org.opensuse.systemdmcp"
-	DBusPath = "/org/opensuse/systemdmcp"
-)
+func getExecutableName() string {
+	exe, err := os.Executable()
+	if err != nil {
+		slog.Error("could not determine executable name", "error", err)
+		return "systemd-mcp" // Fallback name
+	}
+	return filepath.Base(exe)
+}
 
 // IsDBusNameTaken checks if the dbus name is already taken.
-func IsDBusNameTaken() (bool, error) {
+func IsDBusNameTaken(dbusName string) (bool, error) {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		return false, fmt.Errorf("could not connect to system dbus: %w", err)
@@ -32,7 +38,7 @@ func IsDBusNameTaken() (bool, error) {
 	}
 
 	for _, n := range names {
-		if n == DBusName {
+		if n == dbusName {
 			return true, nil
 		}
 	}
@@ -46,6 +52,8 @@ type AuthKeeper struct {
 	Timeout      uint32
 	ReadAllowed  bool
 	WriteAllowed bool
+	DbusName     string
+	DbusPath     string
 }
 
 func checkAuth(conn *dbus.Conn, sender dbus.Sender, actionID string) (bool, *dbus.Error) {
@@ -91,7 +99,7 @@ func checkAuth(conn *dbus.Conn, sender dbus.Sender, actionID string) (bool, *dbu
 }
 
 func (a *AuthKeeper) AuthRead(sender dbus.Sender) *dbus.Error {
-	_, err := checkAuth(a.Conn, sender, "org.opensuse.systemdmcp.AuthRead")
+	_, err := checkAuth(a.Conn, sender, a.DbusName+".AuthRead")
 	if err == nil {
 		a.sender = sender
 	}
@@ -99,14 +107,14 @@ func (a *AuthKeeper) AuthRead(sender dbus.Sender) *dbus.Error {
 }
 
 func (a *AuthKeeper) AuthWrite(sender dbus.Sender) *dbus.Error {
-	_, err := checkAuth(a.Conn, sender, "org.opensuse.systemdmcp.AuthWrite")
+	_, err := checkAuth(a.Conn, sender, a.DbusName+".AuthWrite")
 	if err == nil {
 		a.sender = sender
 	}
 	return err
 }
 
-func SetupDBus() (*AuthKeeper, error) {
+func SetupDBus(dbusName, dbusPath string) (*AuthKeeper, error) {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		slog.Warn("could not connect to system dbus", "error", err)
@@ -114,38 +122,40 @@ func SetupDBus() (*AuthKeeper, error) {
 	}
 
 	keeper := &AuthKeeper{
-		Conn:    conn,
-		Timeout: 5,
+		Conn:     conn,
+		Timeout:  5,
+		DbusName: dbusName,
+		DbusPath: dbusPath,
 	}
 
 	intro := `
 <node>
-	<interface name="` + DBusName + `">
+	<interface name="` + dbusName + `">
 		<method name="AuthRead">
 		</method>
 		<method name="AuthWrite">
 		</method>
 </interface>` + introspect.IntrospectDataString + `</node> `
 
-	conn.Export(keeper, DBusPath, DBusName)
-	conn.Export(introspect.Introspectable(intro), DBusPath, "org.freedesktop.DBus.Introspectable")
+	conn.Export(keeper, dbus.ObjectPath(dbusPath), dbusName)
+	conn.Export(introspect.Introspectable(intro), dbus.ObjectPath(dbusPath), "org.freedesktop.DBus.Introspectable")
 
-	reply, err := conn.RequestName(DBusName, dbus.NameFlagDoNotQueue)
+	reply, err := conn.RequestName(dbusName, dbus.NameFlagDoNotQueue)
 	if err != nil {
 		slog.Warn("could not request dbus name", "error", err)
 		conn.Close()
 		return nil, err
 	}
 	if reply != dbus.RequestNameReplyPrimaryOwner {
-		slog.Warn("dbus name already taken", "name", DBusName)
+		slog.Warn("dbus name already taken", "name", dbusName)
 		conn.Close()
 		return nil, fmt.Errorf("dbus name already taken")
 	}
-	slog.Info("Listening on dbus", "name", DBusName)
+	slog.Info("Listening on dbus", "name", dbusName)
 	return keeper, nil
 }
 
-func (a *AuthKeeper) Read() (bool, error) {
+func (a *AuthKeeper) IsReadAuthorized() (bool, error) {
 	if a.ReadAllowed {
 		return true, nil
 	}
@@ -155,7 +165,7 @@ func (a *AuthKeeper) Read() (bool, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
 		defer cancel()
 
-		state, dbuserr := checkAuth(a.Conn, a.sender, "org.opensuse.systemdmcp.AuthRead")
+		state, dbuserr := checkAuth(a.Conn, a.sender, a.DbusName+".AuthRead")
 		if dbuserr != nil {
 			return false, fmt.Errorf("authorization error: %s", dbuserr)
 		}
@@ -166,10 +176,10 @@ func (a *AuthKeeper) Read() (bool, error) {
 			return state, nil
 		}
 	}
-	return false, fmt.Errorf("authorize reading for systemd-mcp by calling: systemd-mcp allow read")
+	return false, fmt.Errorf("authorize reading by calling: %s --allow-read", getExecutableName())
 }
 
-func (a *AuthKeeper) Write() (bool, error) {
+func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
 	if a.WriteAllowed {
 		return true, nil
 	}
@@ -179,7 +189,7 @@ func (a *AuthKeeper) Write() (bool, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
 		defer cancel()
 
-		state, dbuserr := checkAuth(a.Conn, a.sender, "org.opensuse.systemdmcp.AuthWrite")
+		state, dbuserr := checkAuth(a.Conn, a.sender, a.DbusName+".AuthWrite")
 		if dbuserr != nil {
 			return false, fmt.Errorf("authorization error: %s", dbuserr)
 		}
@@ -190,7 +200,7 @@ func (a *AuthKeeper) Write() (bool, error) {
 			return state, nil
 		}
 	}
-	return false, fmt.Errorf("authorize reading for systemd-mcp by calling: systemd-mcp allow write")
+	return false, fmt.Errorf("authorize writing by calling: %s --allow-write", getExecutableName())
 }
 
 type ReadAuthArgs struct{}
@@ -199,10 +209,10 @@ type IsAuthorizedResult struct {
 	SenderAuth bool `json:"sender_auth"`
 }
 
-func (a *AuthKeeper) IsReadAuthorized(ctx context.Context, req *mcp.CallToolRequest, args *ReadAuthArgs) (*mcp.CallToolResult, any, error) {
+func (a *AuthKeeper) IsReadAuthorizedTool(ctx context.Context, req *mcp.CallToolRequest, args *ReadAuthArgs) (*mcp.CallToolResult, any, error) {
 	slog.Debug("IsReadAuthorized called", "args", args)
 	result := &IsAuthorizedResult{}
-	state, err := a.Read()
+	state, err := a.IsReadAuthorized()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -216,10 +226,10 @@ func (a *AuthKeeper) IsReadAuthorized(ctx context.Context, req *mcp.CallToolRequ
 		nil, nil
 }
 
-func (a *AuthKeeper) IsWriteAuthorized(ctx context.Context, req *mcp.CallToolRequest, args *ReadAuthArgs) (*mcp.CallToolResult, any, error) {
+func (a *AuthKeeper) IsWriteAuthorizedTool(ctx context.Context, req *mcp.CallToolRequest, args *ReadAuthArgs) (*mcp.CallToolResult, any, error) {
 	slog.Debug("IsWriteAuthorized called", "args", args)
 	result := &IsAuthorizedResult{}
-	state, err := a.Write()
+	state, err := a.IsWriteAuthorized()
 	if err != nil {
 		return nil, nil, err
 	}
