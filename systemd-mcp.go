@@ -205,7 +205,10 @@ func main() {
 				Description: descriptionJournal,
 			},
 			Register: func(server *mcp.Server, tool *mcp.Tool) {
-				mcp.AddTool(server, tool, log.ListLog)
+				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *journal.ListLogParams) (*mcp.CallToolResult, any, error) {
+					slog.Debug("list_log called", "args", args)
+					return log.ListLog(ctx, req, args)
+				})
 			},
 		})
 	}
@@ -220,6 +223,7 @@ func main() {
 			},
 			Register: func(server *mcp.Server, tool *mcp.Tool) {
 				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *dbus.ReadAuthArgs) (*mcp.CallToolResult, any, error) {
+					slog.Debug("is_read_authorized called", "args", args)
 					return AuthKeeper.IsReadAuthorized(ctx, req, args)
 				})
 			},
@@ -234,6 +238,7 @@ func main() {
 			},
 			Register: func(server *mcp.Server, tool *mcp.Tool) {
 				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *dbus.ReadAuthArgs) (*mcp.CallToolResult, any, error) {
+					slog.Debug("is_write_authorized called", "args", args)
 					return AuthKeeper.IsWriteAuthorized(ctx, req, args)
 				})
 			},

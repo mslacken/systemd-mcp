@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/coreos/go-systemd/v22/sdjournal"
@@ -45,6 +46,7 @@ func (sj *HostLog) seekAndSkip(count uint64) (uint64, error) {
 }
 
 func (sj *HostLog) ListLogTimeout(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
+	slog.Debug("ListLogTimeout called", "params", params)
 	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
 
