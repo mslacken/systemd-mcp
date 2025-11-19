@@ -222,6 +222,33 @@ func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
 	return false, fmt.Errorf("authorize writing by calling: %s --allow-write", getExecutableName())
 }
 
+// Check if write was authorized for the process itself.
+func (a *AuthKeeper) IsAuthorizedSelf(actionID string) (bool, error) {
+	if os.Getuid() == 0 {
+		return true, nil
+	}
+	if a.WriteAllowed {
+		return true, nil
+	}
+	targetAction := actionID
+	if targetAction == "" {
+		targetAction = a.DbusName + ".AuthWrite"
+	}
+	slog.Debug("checking write auth self", "action", targetAction)
+
+	var uniqueName string
+	err := a.Conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, a.DbusName).Store(&uniqueName)
+	if err != nil {
+		return false, fmt.Errorf("could not get unique name for self: %w", err)
+	}
+
+	state, dbuserr := checkAuth(a.Conn, dbus.Sender(uniqueName), targetAction)
+	if dbuserr != nil {
+		return false, fmt.Errorf("authorization error: %s", dbuserr)
+	}
+	return state, nil
+}
+
 type ReadAuthArgs struct{}
 
 type IsAuthorizedResult struct {

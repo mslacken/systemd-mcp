@@ -290,7 +290,7 @@ func GetRestsartReloadParamsSchema() (*jsonschema.Schema, error) {
 // restart or reload a service
 func (conn *Connection) RestartReloadUnit(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("RestartReloadUnit called", "params", params)
-	allowed, err := conn.auth.IsWriteAuthorized()
+	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-units")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -321,7 +321,7 @@ func (conn *Connection) RestartReloadUnit(ctx context.Context, req *mcp.CallTool
 
 func (conn *Connection) StartUnit(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("StartUnit called", "params", params)
-	allowed, err := conn.auth.IsWriteAuthorized()
+	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-units")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -353,7 +353,7 @@ type CheckReloadRestartParams struct {
 // check status of reload or restart
 func (conn *Connection) CheckForRestartReloadRunning(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("CheckForRestartReloadRunning called", "params", params)
-	allowed, err := conn.auth.IsWriteAuthorized()
+	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-units")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -398,7 +398,7 @@ type StopParams struct {
 // Stop or kill the given unit
 func (conn *Connection) StopUnit(ctx context.Context, req *mcp.CallToolRequest, params *StopParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("StopUnit called", "params", params)
-	allowed, err := conn.auth.IsWriteAuthorized()
+	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-units")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -434,7 +434,7 @@ type EnableParams struct {
 
 func (conn *Connection) EnableDisableUnit(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("EnableDisableUnit called", "params", params)
-	allowed, err := conn.auth.IsWriteAuthorized()
+	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-unit-files")
 	if err != nil {
 		return nil, nil, err
 	}

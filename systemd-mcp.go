@@ -136,37 +136,39 @@ func main() {
 		}
 	}
 	// elevate if not running as root
-	if os.Geteuid() != 0 {
-		exe, err := os.Executable()
-		if err != nil {
-			slog.Error("could not find executable path", "error", err)
-			os.Exit(1)
-		}
-
-		slog.Info("Not running as root, attempting to elevate privileges with pkexec.")
-
-		cmd := exec.Command("pkexec", append([]string{exe}, os.Args[1:]...)...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Stdin = os.Stdin
-
-		err = cmd.Run()
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				// pkexec returns 127 if command not found, 126 if user cancels.
-				if exitErr.ExitCode() == 126 {
-					slog.Error("Authorization cancelled by user.")
-				} else {
-					slog.Error("failed to elevate privileges", "error", err)
-				}
-				os.Exit(exitErr.ExitCode())
-			} else {
-				slog.Error("failed to execute pkexec", "error", err)
+	/*
+		if os.Geteuid() != 0 {
+			exe, err := os.Executable()
+			if err != nil {
+				slog.Error("could not find executable path", "error", err)
 				os.Exit(1)
 			}
+
+			slog.Info("Not running as root, attempting to elevate privileges with pkexec.")
+
+			cmd := exec.Command("pkexec", append([]string{exe}, os.Args[1:]...)...)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Stdin = os.Stdin
+
+			err = cmd.Run()
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					// pkexec returns 127 if command not found, 126 if user cancels.
+					if exitErr.ExitCode() == 126 {
+						slog.Error("Authorization cancelled by user.")
+					} else {
+						slog.Error("failed to elevate privileges", "error", err)
+					}
+					os.Exit(exitErr.ExitCode())
+				} else {
+					slog.Error("failed to execute pkexec", "error", err)
+					os.Exit(1)
+				}
+			}
+			os.Exit(0)
 		}
-		os.Exit(0)
-	}
+	*/
 	AuthKeeper := &dbus.AuthKeeper{}
 	if !viper.GetBool("noauth") {
 		var err error

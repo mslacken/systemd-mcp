@@ -9,6 +9,7 @@ import (
 
 // DbusConnection is an interface that abstracts the dbus connection.
 // This is primarily for testing purposes.
+/*
 type DbusConnection interface {
 	ListUnitsContext(ctx context.Context) ([]dbus.UnitStatus, error)
 	ListUnitsFilteredContext(ctx context.Context, states []string) ([]dbus.UnitStatus, error)
@@ -25,11 +26,13 @@ type DbusConnection interface {
 
 	Close()
 }
+*/
 
 type Connection struct {
 	rchannel chan string
-	dbus     DbusConnection
-	auth     *auth.AuthKeeper
+	dbus     *dbus.Conn
+	// dbus     DbusConnection
+	auth *auth.AuthKeeper
 }
 
 // opens a new user connection to the dbus
