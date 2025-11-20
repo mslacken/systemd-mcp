@@ -190,6 +190,40 @@ func getSessionID(conn *dbus.Conn) (string, error) {
 	return "", fmt.Errorf("no active session found on any seat")
 }
 
+// IsLocal checks if the current session is local.
+func (a *AuthKeeper) IsLocal() bool {
+	sessionID, err := getSessionID(a.Conn)
+	if err != nil {
+		slog.Error("could not get session ID for IsLocal check", "error", err)
+		return false
+	}
+
+	var sessionPath dbus.ObjectPath
+	err = a.Conn.Object("org.freedesktop.login1", "/org/freedesktop/login1").
+		Call("org.freedesktop.login1.Manager.GetSession", 0, sessionID).
+		Store(&sessionPath)
+	if err != nil {
+		slog.Error("failed to get session path", "sessionID", sessionID, "error", err)
+		return false
+	}
+
+	variant, err := a.Conn.Object("org.freedesktop.login1", sessionPath).
+		GetProperty("org.freedesktop.login1.Session.Remote")
+	if err != nil {
+		slog.Error("failed to get Remote property for session", "sessionID", sessionID, "error", err)
+		return false
+	}
+
+	isRemote, ok := variant.Value().(bool)
+	if !ok {
+		slog.Error("Remote property is not a boolean", "sessionID", sessionID)
+		return false
+	}
+
+	slog.Debug("session", "remote", isRemote)
+	return !isRemote
+}
+
 // Deauthorize revokes the authorization
 func (a *AuthKeeper) Deauthorize() *dbus.Error {
 	slog.Debug("Deauthorize called")
@@ -307,7 +341,7 @@ func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
 		return true, nil
 	}
 	// would always succeed if root so skip for root
-	if a.sender == "" && os.Geteuid() != 0 {
+	if a.sender == "" && a.IsLocal() && os.Geteuid() != 0 {
 		err := a.Conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, a.DbusName).Store(&a.sender)
 		if err != nil {
 			return false, fmt.Errorf("could not get unique name for self: %w", err)
