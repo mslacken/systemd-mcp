@@ -123,6 +123,38 @@ func (a *AuthKeeper) AuthRegister(sender dbus.Sender) *dbus.Error {
 	return nil
 }
 
+// Deauthorize revokes the authorization
+func (a *AuthKeeper) Deauthorize() *dbus.Error {
+	slog.Debug("Deauthorize called")
+	a.WriteAllowed = false
+	if a.sender != "" {
+		subject := struct {
+			A string
+			B map[string]dbus.Variant
+		}{
+			"system-bus-name",
+			map[string]dbus.Variant{
+				"name": dbus.MakeVariant(string(a.sender)),
+			},
+		}
+		slog.Debug("revoking auth", "subject", subject)
+
+		pkObj := a.Conn.Object("org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority")
+		err := pkObj.Call("org.freedesktop.PolicyKit1.Authority.RevokeTemporaryAuthorizations", 0,
+			subject).Store()
+
+		if err != nil {
+			slog.Error("error revoking authorization", "error", err)
+			return &dbus.Error{
+				Name: "org.opensuse.systemdmcp.Error.AuthError",
+				Body: []interface{}{"Error revoking authorization: " + err.Error()},
+			}
+		}
+		a.sender = ""
+	}
+	return nil
+}
+
 // setup the dbus authorization call back. Creates AuthWrite and
 // AuthRead dbus methods so that authorization can be done by
 // another process calliing this methods.
@@ -148,7 +180,8 @@ func SetupDBus(dbusName, dbusPath string) (*AuthKeeper, error) {
 		<method name="AuthWrite">
 		</method>
 		<method name="AuthRegister">
-		<!-- Register so that polkit knows whom to call back -->
+		</method>
+		<method name="Deauthorize">
 		</method>
 </interface>` + introspect.IntrospectDataString + `</node> `
 
@@ -203,23 +236,37 @@ func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
 		return true, nil
 	}
 	slog.Debug("checking write auth")
-	if a.sender != "" {
-		slog.Debug("dbus sender", "address", a.sender)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
-		defer cancel()
+	if a.sender == "" {
+		var uniqueName string
+		err := a.Conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, a.DbusName).Store(&uniqueName)
+		if err != nil {
+			return false, fmt.Errorf("could not get unique name for self: %w", err)
 
-		state, dbuserr := checkAuth(a.Conn, a.sender, a.DbusName+".AuthWrite")
+		}
+		slog.Debug("geeting send name", "uniqname", uniqueName)
+		a.sender = dbus.Sender(uniqueName)
+	}
+	slog.Debug("dbus sender", "address", a.sender)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
+	defer cancel()
+
+	state, dbuserr := checkAuth(a.Conn, a.sender, a.DbusName+".AuthWrite")
+	if dbuserr != nil {
+		return false, fmt.Errorf("authorization error: %s", dbuserr)
+	}
+	/*
+		state, dbuserr = checkAuth(a.Conn, a.sender, "org.freedesktop.systemd1.manage-units")
 		if dbuserr != nil {
 			return false, fmt.Errorf("authorization error: %s", dbuserr)
 		}
-		select {
-		case <-ctx.Done():
-			return false, fmt.Errorf("write authorization timed out: %w", ctx.Err())
-		default:
-			return state, nil
-		}
+	*/
+	select {
+	case <-ctx.Done():
+		return false, fmt.Errorf("write authorization timed out: %w", ctx.Err())
+	default:
+		return state, nil
 	}
-	return false, fmt.Errorf("authorize writing by calling: %s --allow-write", getExecutableName())
+	// return false, fmt.Errorf("authorize writing by calling: %s --allow-write", getExecutableName())
 }
 
 // Check if write was authorized for the process itself.

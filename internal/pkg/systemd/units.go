@@ -290,7 +290,7 @@ func GetRestsartReloadParamsSchema() (*jsonschema.Schema, error) {
 // restart or reload a service
 func (conn *Connection) RestartReloadUnit(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("RestartReloadUnit called", "params", params)
-	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-units")
+	allowed, err := conn.auth.IsWriteAuthorized()
 	if err != nil {
 		return nil, nil, err
 	}
