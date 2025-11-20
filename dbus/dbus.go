@@ -1,12 +1,14 @@
 package dbus
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -123,32 +125,101 @@ func (a *AuthKeeper) AuthRegister(sender dbus.Sender) *dbus.Error {
 	return nil
 }
 
+func getSessionIdFromPid(pid uint32) (string, error) {
+	f, err := os.Open(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Look for line like: 0::/user.slice/user-1000.slice/session-3.scope
+		if strings.Contains(line, "session-") && strings.HasSuffix(line, ".scope") {
+			parts := strings.Split(line, "/")
+			for _, p := range parts {
+				if strings.HasPrefix(p, "session-") && strings.HasSuffix(p, ".scope") {
+					return strings.TrimSuffix(strings.TrimPrefix(p, "session-"), ".scope"), nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("session scope not found in cgroup for pid %d", pid)
+}
+
+func getSessionID(conn *dbus.Conn) (string, error) {
+	var seats []struct {
+		Name string
+		Path dbus.ObjectPath
+	}
+	err := conn.Object("org.freedesktop.login1", "/org/freedesktop/login1").
+		Call("org.freedesktop.login1.Manager.ListSeats", 0).
+		Store(&seats)
+	if err != nil {
+		return "", fmt.Errorf("failed to list seats: %w", err)
+	}
+
+	if len(seats) == 0 {
+		return "", fmt.Errorf("no seats found")
+	}
+	slog.Debug("active seats", "seats", seats)
+	for _, seat := range seats {
+		// ActiveSession property is (so) - (session_id, session_object_path)
+		variant, err := conn.Object("org.freedesktop.login1", seat.Path).
+			GetProperty("org.freedesktop.login1.Seat.ActiveSession")
+		if err != nil {
+			slog.Debug("failed to get ActiveSession property", "seat", seat.Name, "error", err)
+			continue
+		}
+
+		// godbus decodes structs to []interface{} by default in variants
+		val, ok := variant.Value().([]interface{})
+		if !ok || len(val) < 2 {
+			continue
+		}
+
+		sessionID, ok := val[0].(string)
+		if !ok || sessionID == "" {
+			continue
+		}
+
+		return sessionID, nil
+	}
+
+	return "", fmt.Errorf("no active session found on any seat")
+}
+
 // Deauthorize revokes the authorization
 func (a *AuthKeeper) Deauthorize() *dbus.Error {
 	slog.Debug("Deauthorize called")
 	a.WriteAllowed = false
 	if a.sender != "" {
-		subject := struct {
+		sessionID, err := getSessionID(a.Conn)
+		if err != nil {
+			slog.Error("could not get session ID for deauthorization", "error", err)
+		}
+
+		var subject interface{}
+		subject = struct {
 			A string
 			B map[string]dbus.Variant
 		}{
-			"system-bus-name",
+			"unix-session",
 			map[string]dbus.Variant{
-				"name": dbus.MakeVariant(string(a.sender)),
+				"session-id": dbus.MakeVariant(sessionID),
 			},
 		}
+
 		slog.Debug("revoking auth", "subject", subject)
 
 		pkObj := a.Conn.Object("org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority")
-		err := pkObj.Call("org.freedesktop.PolicyKit1.Authority.RevokeTemporaryAuthorizations", 0,
+		err = pkObj.Call("org.freedesktop.PolicyKit1.Authority.RevokeTemporaryAuthorizations", 0,
 			subject).Store()
 
 		if err != nil {
-			slog.Error("error revoking authorization", "error", err)
-			return &dbus.Error{
-				Name: "org.opensuse.systemdmcp.Error.AuthError",
-				Body: []interface{}{"Error revoking authorization: " + err.Error()},
-			}
+			// Log warning but do not fail the operation; revocation is best-effort
+			slog.Warn("error revoking polkit authorization (this is expected if systemd-mcp is running as a system service)", "error", err)
 		}
 		a.sender = ""
 	}
@@ -235,16 +306,16 @@ func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
 	if a.WriteAllowed {
 		return true, nil
 	}
-	slog.Debug("checking write auth")
-	if a.sender == "" {
-		var uniqueName string
-		err := a.Conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, a.DbusName).Store(&uniqueName)
+	// would always succeed if root so skip for root
+	if a.sender == "" && os.Geteuid() != 0 {
+		err := a.Conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, a.DbusName).Store(&a.sender)
 		if err != nil {
 			return false, fmt.Errorf("could not get unique name for self: %w", err)
 
 		}
-		slog.Debug("geeting send name", "uniqname", uniqueName)
-		a.sender = dbus.Sender(uniqueName)
+		slog.Debug("name owner", "sender", a.sender)
+	} else {
+		return false, fmt.Errorf("write to systemd must authorized externally")
 	}
 	slog.Debug("dbus sender", "address", a.sender)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
@@ -252,14 +323,12 @@ func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
 
 	state, dbuserr := checkAuth(a.Conn, a.sender, a.DbusName+".AuthWrite")
 	if dbuserr != nil {
-		return false, fmt.Errorf("authorization error: %s", dbuserr)
-	}
-	/*
 		state, dbuserr = checkAuth(a.Conn, a.sender, "org.freedesktop.systemd1.manage-units")
 		if dbuserr != nil {
 			return false, fmt.Errorf("authorization error: %s", dbuserr)
 		}
-	*/
+	}
+
 	select {
 	case <-ctx.Done():
 		return false, fmt.Errorf("write authorization timed out: %w", ctx.Err())
