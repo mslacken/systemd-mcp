@@ -65,6 +65,16 @@ type ListUnitParams struct {
 	Verbose bool   `json:"verbose,omitempty" jsonschema:"Set to true for more detail. Otherwise set to false."`
 }
 
+func CreateListInputSchema() *jsonschema.Schema {
+	inputschmema, _ := jsonschema.For[ListUnitParams](nil)
+	var states []any
+	for _, s := range ValidStates() {
+		states = append(states, s)
+	}
+	inputschmema.Properties["state"].Enum = states
+	return inputschmema
+}
+
 func (conn *Connection) ListUnitState(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitParams) (*mcp.CallToolResult, any, error) {
 	slog.Debug("ListUnitState called", "params", params)
 	allowed, err := conn.auth.IsReadAuthorized()

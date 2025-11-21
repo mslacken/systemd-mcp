@@ -211,6 +211,7 @@ func main() {
 					Title:       "List units",
 					Name:        "list_systemd_units_by_state",
 					Description: fmt.Sprintf("List the requested systemd units and services on the host with the given state. Does not list the services in other states. As a result the unit name, description and name are listed as json. Valid states are: %v", systemd.ValidStates()),
+					InputSchema: systemd.CreateListInputSchema(),
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
 					mcp.AddTool(server, tool, systemConn.ListUnitState)
