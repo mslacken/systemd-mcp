@@ -49,9 +49,7 @@ func main() {
 	viper.AutomaticEnv()
 	viper.BindPFlags(pflag.CommandLine)
 	logLevel := slog.LevelInfo
-	if viper.GetBool("verbose") {
-		logLevel = slog.LevelInfo
-	}
+
 	if viper.GetBool("debug") {
 		logLevel = slog.LevelDebug
 	}
@@ -77,6 +75,8 @@ func main() {
 		logger = slog.New(slog.NewTextHandler(logOutput, handlerOpts))
 	}
 	slog.SetDefault(logger)
+
+	slog.Debug("Logger initialized", "level", logLevel)
 
 	if (viper.GetBool("allow-read") || viper.GetBool("allow-write") || viper.GetBool("auth-register") || viper.GetBool("internal-agent")) && !viper.GetBool("noauth") {
 		taken, err := dbus.IsDBusNameTaken(DBusName)
@@ -135,40 +135,6 @@ func main() {
 			os.Exit(0)
 		}
 	}
-	// elevate if not running as root
-	/*
-		if os.Geteuid() != 0 {
-			exe, err := os.Executable()
-			if err != nil {
-				slog.Error("could not find executable path", "error", err)
-				os.Exit(1)
-			}
-
-			slog.Info("Not running as root, attempting to elevate privileges with pkexec.")
-
-			cmd := exec.Command("pkexec", append([]string{exe}, os.Args[1:]...)...)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			cmd.Stdin = os.Stdin
-
-			err = cmd.Run()
-			if err != nil {
-				if exitErr, ok := err.(*exec.ExitError); ok {
-					// pkexec returns 127 if command not found, 126 if user cancels.
-					if exitErr.ExitCode() == 126 {
-						slog.Error("Authorization cancelled by user.")
-					} else {
-						slog.Error("failed to elevate privileges", "error", err)
-					}
-					os.Exit(exitErr.ExitCode())
-				} else {
-					slog.Error("failed to execute pkexec", "error", err)
-					os.Exit(1)
-				}
-			}
-			os.Exit(0)
-		}
-	*/
 	AuthKeeper := &dbus.AuthKeeper{}
 	if !viper.GetBool("noauth") {
 		var err error
@@ -211,6 +177,7 @@ func main() {
 					Title:       "List units",
 					Name:        "list_systemd_units_by_state",
 					Description: fmt.Sprintf("List the requested systemd units and services on the host with the given state. Does not list the services in other states. As a result the unit name, description and name are listed as json. Valid states are: %v", systemd.ValidStates()),
+					InputSchema: systemd.CreateListInputSchema(),
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
 					mcp.AddTool(server, tool, systemConn.ListUnitState)
@@ -233,35 +200,12 @@ func main() {
 				Register func(server *mcp.Server, tool *mcp.Tool)
 			}{
 				Tool: &mcp.Tool{
-					Name:        "restart_reload_unit",
-					Description: "Reload or restart a unit or service.",
+					Name:        "change_unit_state",
+					Description: "Change the state of a unit or service (start, stop, restart, reload, enable, disable).",
+					InputSchema: systemd.CreateChangeInputSchema(),
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
-					mcp.AddTool(server, tool, systemConn.RestartReloadUnit)
-				},
-			},
-			struct {
-				Tool     *mcp.Tool
-				Register func(server *mcp.Server, tool *mcp.Tool)
-			}{
-				Tool: &mcp.Tool{
-					Name:        "start_reload_unit",
-					Description: "Start a unit or service. This doesn't enable the unit.",
-				},
-				Register: func(server *mcp.Server, tool *mcp.Tool) {
-					mcp.AddTool(server, tool, systemConn.StartUnit)
-				},
-			},
-			struct {
-				Tool     *mcp.Tool
-				Register func(server *mcp.Server, tool *mcp.Tool)
-			}{
-				Tool: &mcp.Tool{
-					Name:        "stop_unit",
-					Description: "Stop a unit or service or unit.",
-				},
-				Register: func(server *mcp.Server, tool *mcp.Tool) {
-					mcp.AddTool(server, tool, systemConn.StopUnit)
+					mcp.AddTool(server, tool, systemConn.ChangeUnitState)
 				},
 			},
 			struct {
@@ -281,18 +225,6 @@ func main() {
 				Register func(server *mcp.Server, tool *mcp.Tool)
 			}{
 				Tool: &mcp.Tool{
-					Name:        "enable_or_disable_unit",
-					Description: "Enable a unit or service for the next startup of the system. This does not start the unit.",
-				},
-				Register: func(server *mcp.Server, tool *mcp.Tool) {
-					mcp.AddTool(server, tool, systemConn.EnableDisableUnit)
-				},
-			},
-			struct {
-				Tool     *mcp.Tool
-				Register func(server *mcp.Server, tool *mcp.Tool)
-			}{
-				Tool: &mcp.Tool{
 					Name:        "list_unit_files",
 					Description: "Returns a list of all the unit files known to systemd. This tool can be used to determine the correct unit/service names for other calls.",
 				},
@@ -303,9 +235,6 @@ func main() {
 		)
 	}
 	descriptionJournal := "Get the last log entries for the given service or unit."
-	if os.Geteuid() != 0 {
-		descriptionJournal += "Please note that this tool is not running as root, so system resources may not be listed correctly."
-	}
 	log, err := journal.NewLog(AuthKeeper)
 	if err != nil {
 		slog.Warn("couldn't open log, not adding journal tool", slog.Any("error", err))

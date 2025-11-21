@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-systemd/v22/dbus"
@@ -15,47 +16,6 @@ import (
 	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
 )
 
-// create a resource desription for getting the systemd states
-/*
-func UnitRessource(state string) mcp.Resource {
-	return mcp.NewResource(fmt.Sprintf("systemd://units/state/%s", state),
-		fmt.Sprintf("systemd units and services on the host with the state %s", state),
-		mcp.WithMIMEType("application/json"),
-	)
-}
-
-// create a handler for to get the given state, some extra handing for
-// the 'all' state, which is not implemted by the API
-func (conn *Connection) CreateResHandler(state string) func(context.Context, mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	return func(ctx context.Context,
-		request mcp.ReadResourceRequest,
-	) (resources []mcp.ResourceContents, err error) {
-		var units []dbus.UnitStatus
-		if strings.EqualFold(state, "all") {
-			units, err = conn.dbus.ListUnitsContext(ctx)
-			if err != nil {
-				return resources, err
-			}
-		} else {
-			units, err = conn.dbus.ListUnitsFilteredContext(ctx, []string{state})
-			if err != nil {
-				return nil, err
-			}
-		}
-		jsonByte, err := json.Marshal(&units)
-		if err != nil {
-			return nil, err
-		}
-		return []mcp.ResourceContents{
-			mcp.TextResourceContents{
-				URI:      request.Params.URI,
-				MIMEType: "application/json",
-				Text:     string(jsonByte),
-			},
-		}, nil
-	}
-}
-*/
 func ValidStates() []string {
 	return []string{"active", "dead", "inactive", "loaded", "mounted", "not-found", "plugged", "running", "all"}
 }
@@ -63,6 +23,16 @@ func ValidStates() []string {
 type ListUnitParams struct {
 	State   string `json:"state" jsonschema:"List units that are in this state. The keyword 'all' can be used to get all available units on the system."`
 	Verbose bool   `json:"verbose,omitempty" jsonschema:"Set to true for more detail. Otherwise set to false."`
+}
+
+func CreateListInputSchema() *jsonschema.Schema {
+	inputschmema, _ := jsonschema.For[ListUnitParams](nil)
+	var states []any
+	for _, s := range ValidStates() {
+		states = append(states, s)
+	}
+	inputschmema.Properties["state"].Enum = states
+	return inputschmema
 }
 
 func (conn *Connection) ListUnitState(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitParams) (*mcp.CallToolResult, any, error) {
@@ -287,65 +257,6 @@ func GetRestsartReloadParamsSchema() (*jsonschema.Schema, error) {
 	return schema, nil
 }
 
-// restart or reload a service
-func (conn *Connection) RestartReloadUnit(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
-	slog.Debug("RestartReloadUnit called", "params", params)
-	allowed, err := conn.auth.IsWriteAuthorized()
-	if err != nil {
-		return nil, nil, err
-	}
-	if !allowed {
-		return nil, nil, fmt.Errorf("calling method was canceled by user")
-	}
-	if params.Mode == "" {
-		params.Mode = "replace"
-	}
-	if !slices.Contains(ValidRestartModes(), params.Mode) {
-		return nil, nil, fmt.Errorf("invalid mode for restart or reload: %s", params.Mode)
-	}
-	if params.TimeOut > MaxTimeOut {
-		return nil, nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
-	}
-	if params.Forcerestart {
-		_, err = conn.dbus.RestartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
-	} else {
-		_, err = conn.dbus.ReloadOrRestartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	return conn.CheckForRestartReloadRunning(ctx, req, &RestartReloadParams{
-		TimeOut: params.TimeOut,
-	})
-}
-
-func (conn *Connection) StartUnit(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
-	slog.Debug("StartUnit called", "params", params)
-	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-units")
-	if err != nil {
-		return nil, nil, err
-	}
-	if !allowed {
-		return nil, nil, fmt.Errorf("calling method was canceled by user")
-	}
-	if params.Mode == "" {
-		params.Mode = "replace"
-	}
-	if !slices.Contains(ValidRestartModes(), params.Mode) {
-		return nil, nil, fmt.Errorf("invalid mode for restart or reload: %s", params.Mode)
-	}
-	if params.TimeOut > MaxTimeOut {
-		return nil, nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
-	}
-	_, err = conn.dbus.StartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
-	if err != nil {
-		return nil, nil, err
-	}
-	return conn.CheckForRestartReloadRunning(ctx, req, &RestartReloadParams{
-		TimeOut: params.TimeOut,
-	})
-}
-
 type CheckReloadRestartParams struct {
 	TimeOut uint `json:"timeout,omitempty" jsonschema:"Time to wait for the restart or reload to finish. After the timeout the function will return and restart and reload will run in the background and the result can be retreived with a separate function."`
 }
@@ -384,144 +295,6 @@ func (conn *Connection) CheckForRestartReloadRunning(ctx context.Context, req *m
 					Text: "Finished",
 				},
 			},
-		}, nil, nil
-	}
-}
-
-type StopParams struct {
-	Name    string `json:"name" jsonschema:"Exact name of unit to stop"`
-	TimeOut uint   `json:"timeout,omitempty" jsonschema:"Time to wait for the stop to finish. After the timeout the function will return and stop run in the background and the result can be retreived with a separate function."`
-	Mode    string `json:"mode,omitempty" jsonschema:"mode of the operation. 'replace' should be used per default and replace allready queued jobs. With 'fail' the operation will fail if other operations are in progress."`
-	Kill    bool   `json:"kill,omitempty" jsonschema:"Kill the unit instead of shutting down cleanly. Use this option only if the unit doesn't shut down, even after waiting."`
-}
-
-// Stop or kill the given unit
-func (conn *Connection) StopUnit(ctx context.Context, req *mcp.CallToolRequest, params *StopParams) (res *mcp.CallToolResult, _ any, err error) {
-	slog.Debug("StopUnit called", "params", params)
-	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-units")
-	if err != nil {
-		return nil, nil, err
-	}
-	if !allowed {
-		return nil, nil, fmt.Errorf("calling method was canceled by user")
-	}
-	if params.Mode == "" {
-		params.Mode = "replace"
-	}
-	if !slices.Contains(ValidRestartModes(), params.Mode) {
-		return nil, nil, fmt.Errorf("invalid mode for restart or reload: %s", params.Mode)
-	}
-	if params.TimeOut > MaxTimeOut {
-		return nil, nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
-	}
-	if params.Kill {
-		conn.dbus.KillUnitContext(ctx, params.Name, int32(9))
-	} else {
-		_, err = conn.dbus.StopUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	return conn.CheckForRestartReloadRunning(ctx, req, &RestartReloadParams{
-		TimeOut: params.TimeOut,
-	})
-}
-
-type EnableParams struct {
-	File    string `json:"file" jsonschema:"Name of the service or unit if the unit is in the standard location. Takes the absolute path if the unit or service is not placed under '/etc/' or '/usr/lib/systemd'. Does not take wildcards. For the service foo, this would be 'foo.service' if foo is installed by a package."`
-	Disable bool   `json:"disable,omitempty" jsonschema:"Set to true to disable the unit instead of enable."`
-}
-
-func (conn *Connection) EnableDisableUnit(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
-	slog.Debug("EnableDisableUnit called", "params", params)
-	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-unit-files")
-	if err != nil {
-		return nil, nil, err
-	}
-	if !allowed {
-		return nil, nil, fmt.Errorf("calling method was canceled by user")
-	}
-	if params.Disable {
-		return conn.DisableUnit(ctx, req, params)
-	} else {
-		return conn.EnableUnit(ctx, req, params)
-	}
-}
-
-func (conn *Connection) EnableUnit(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
-	_, enabledRes, err := conn.dbus.EnableUnitFilesContext(ctx, []string{params.File}, false, true)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error when enabling: %w", err)
-	}
-	if len(enabledRes) == 0 {
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{
-					Text: fmt.Sprintf("nothing changed for %s", params.File),
-				},
-			},
-		}, nil, nil
-	} else {
-		txtContentList := []mcp.Content{}
-		for _, res := range enabledRes {
-			resJson := struct {
-				Type        string `json:"type"`
-				Filename    string `json:"filename"`
-				Destination string `json:"destination"`
-			}{
-				Type:        res.Type,
-				Filename:    res.Filename,
-				Destination: res.Destination,
-			}
-			jsonByte, err := json.Marshal(resJson)
-			if err != nil {
-				return nil, nil, fmt.Errorf("could not unmarshall result: %w", err)
-			}
-			txtContentList = append(txtContentList, &mcp.TextContent{
-				Text: string(jsonByte),
-			})
-		}
-		return &mcp.CallToolResult{
-			Content: txtContentList,
-		}, nil, nil
-	}
-}
-
-func (conn *Connection) DisableUnit(ctx context.Context, req *mcp.CallToolRequest, params *EnableParams) (res *mcp.CallToolResult, _ any, err error) {
-	disabledRes, err := conn.dbus.DisableUnitFilesContext(ctx, []string{params.File}, false)
-	if err != nil {
-		return nil, nil, fmt.Errorf("error when disabling: %w", err)
-	}
-	if len(disabledRes) == 0 {
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				&mcp.TextContent{
-					Text: fmt.Sprintf("nothing changed for %s", params.File),
-				},
-			},
-		}, nil, nil
-	} else {
-		txtContentList := []mcp.Content{}
-		for _, res := range disabledRes {
-			resJson := struct {
-				Type        string `json:"type"`
-				Filename    string `json:"filename"`
-				Destination string `json:"destination"`
-			}{
-				Type:        res.Type,
-				Filename:    res.Filename,
-				Destination: res.Destination,
-			}
-			jsonByte, err := json.Marshal(resJson)
-			if err != nil {
-				return nil, nil, fmt.Errorf("could not unmarshall result: %w", err)
-			}
-			txtContentList = append(txtContentList, &mcp.TextContent{
-				Text: string(jsonByte),
-			})
-		}
-		return &mcp.CallToolResult{
-			Content: txtContentList,
 		}, nil, nil
 	}
 }
@@ -565,4 +338,138 @@ func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequ
 	return &mcp.CallToolResult{
 		Content: txtContentList,
 	}, nil, nil
+}
+
+type ChangeUnitStateParams struct {
+	Name    string `json:"name" jsonschema:"Exact name of unit to change state"`
+	Action  string `json:"action" jsonschema:"Action to perform."`
+	Mode    string `json:"mode,omitempty" jsonschema:"Mode when restarting a unit. Defaults to 'replace'."`
+	TimeOut uint   `json:"timeout,omitempty" jsonschema:"Time to wait for the operation to finish. Max 60s."`
+	Runtime bool   `json:"runtime,omitempty" jsonschema:"Enable/Disable only temporarily (runtime)."`
+}
+
+func ValidChanges() []string {
+	return []string{"restart", "restart_force", "stop", "stop_kill", "reload", "enable", "enable_force", "disable"}
+}
+func ValidModes() []string {
+	return []string{"replace", "fail", "isolate", "ignore-dependencies", "ignore-requirements"}
+}
+
+func CreateChangeInputSchema() *jsonschema.Schema {
+	inputSchmema, _ := jsonschema.For[ChangeUnitStateParams](nil)
+	var states []any
+	var modes []any
+	for _, s := range ValidChanges() {
+		states = append(states, s)
+	}
+	for _, m := range ValidModes() {
+		modes = append(modes, m)
+	}
+	inputSchmema.Properties["action"].Enum = states
+	inputSchmema.Properties["action"].Default = json.RawMessage("\"enable\"")
+	inputSchmema.Properties["mode"].Enum = modes
+	inputSchmema.Properties["mode"].Default = json.RawMessage("\"replace\"")
+	inputSchmema.Properties["timeout"].Default = json.RawMessage("30")
+
+	return inputSchmema
+}
+
+func (conn *Connection) ChangeUnitState(ctx context.Context, req *mcp.CallToolRequest, params *ChangeUnitStateParams) (res *mcp.CallToolResult, _ any, err error) {
+	slog.Debug("ChangeUnitState called", "params", params)
+
+	var permission string
+	if params.Action == "enable" || params.Action == "disable" {
+		permission = "org.freedesktop.systemd1.manage-unit-files"
+	} else {
+		permission = "org.freedesktop.systemd1.manage-units"
+	}
+	allowed, err := conn.auth.IsAuthorizedSelf(permission)
+	defer conn.auth.Deauthorize()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
+
+	if params.TimeOut > MaxTimeOut {
+		return nil, nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
+	}
+
+	switch params.Action {
+	case "start":
+		if params.Mode == "" {
+			params.Mode = "replace"
+		}
+		if !slices.Contains(ValidRestartModes(), params.Mode) {
+			return nil, nil, fmt.Errorf("invalid mode for start: %s", params.Mode)
+		}
+		_, err = conn.dbus.StartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
+	case "stop":
+		_, err = conn.dbus.StopUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
+	case "stop_kill":
+		conn.dbus.KillUnitContext(ctx, params.Name, int32(9))
+	case "restart_force":
+		_, err = conn.dbus.RestartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
+	case "restart":
+		_, err = conn.dbus.ReloadOrRestartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
+	case "reload":
+		_, err = conn.dbus.ReloadOrRestartUnitContext(ctx, params.Name, params.Mode, conn.rchannel)
+	case "enable", "enable_force":
+		_, enabledRes, err := conn.dbus.EnableUnitFilesContext(ctx, []string{params.Name}, params.Runtime, strings.HasSuffix(params.Action, "_force"))
+		if err != nil {
+			return nil, nil, fmt.Errorf("error when enabling: %w", err)
+		}
+		if len(enabledRes) == 0 {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: fmt.Sprintf("nothing changed for %s", params.Name)},
+				},
+			}, nil, nil
+		}
+		txtContentList := []mcp.Content{}
+		for _, res := range enabledRes {
+			resJson := struct {
+				Type        string `json:"type"`
+				Filename    string `json:"filename"`
+				Destination string `json:"destination"`
+			}{Type: res.Type, Filename: res.Filename, Destination: res.Destination}
+			jsonByte, _ := json.Marshal(resJson)
+			txtContentList = append(txtContentList, &mcp.TextContent{Text: string(jsonByte)})
+		}
+		return &mcp.CallToolResult{Content: txtContentList}, nil, nil
+	case "disable":
+		disabledRes, err := conn.dbus.DisableUnitFilesContext(ctx, []string{params.Name}, params.Runtime)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error when disabling: %w", err)
+		}
+		if len(disabledRes) == 0 {
+			return &mcp.CallToolResult{
+				Content: []mcp.Content{
+					&mcp.TextContent{Text: fmt.Sprintf("nothing changed for %s", params.Name)},
+				},
+			}, nil, nil
+		}
+		txtContentList := []mcp.Content{}
+		for _, res := range disabledRes {
+			resJson := struct {
+				Type        string `json:"type"`
+				Filename    string `json:"filename"`
+				Destination string `json:"destination"`
+			}{Type: res.Type, Filename: res.Filename, Destination: res.Destination}
+			jsonByte, _ := json.Marshal(resJson)
+			txtContentList = append(txtContentList, &mcp.TextContent{Text: string(jsonByte)})
+		}
+		return &mcp.CallToolResult{Content: txtContentList}, nil, nil
+	default:
+		return nil, nil, fmt.Errorf("invalid action: %s", params.Action)
+	}
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return conn.CheckForRestartReloadRunning(ctx, req, &RestartReloadParams{
+		TimeOut: params.TimeOut,
+	})
 }
