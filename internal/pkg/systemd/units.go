@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coreos/go-systemd/v22/dbus"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
@@ -20,23 +19,75 @@ func ValidStates() []string {
 	return []string{"active", "dead", "inactive", "loaded", "mounted", "not-found", "plugged", "running", "all"}
 }
 
-type ListUnitParams struct {
-	State   string `json:"state" jsonschema:"List units that are in this state. The keyword 'all' can be used to get all available units on the system."`
-	Verbose bool   `json:"verbose,omitempty" jsonschema:"Set to true for more detail. Otherwise set to false."`
+func ValidUnitFileStates() []string {
+	return []string{"enabled", "enabled-runtime", "linked", "linked-runtime", "masked", "masked-runtime", "static", "disabled", "invalid"}
 }
 
-func CreateListInputSchema() *jsonschema.Schema {
-	inputschmema, _ := jsonschema.For[ListUnitParams](nil)
+type UnitProperties struct {
+	Id          string `json:"Id"`
+	Description string `json:"Description"`
+
+	// Load state info
+	LoadState      string `json:"LoadState"`
+	FragmentPath   string `json:"FragmentPath"`
+	UnitFileState  string `json:"UnitFileState"`
+	UnitFilePreset string `json:"UnitFilePreset"`
+
+	// Active state info
+	ActiveState          string `json:"ActiveState"`
+	SubState             string `json:"SubState"`
+	ActiveEnterTimestamp uint64 `json:"ActiveEnterTimestamp"`
+
+	// Process info
+	InvocationID   string `json:"InvocationID"`
+	MainPID        int    `json:"MainPID"`
+	ExecMainPID    int    `json:"ExecMainPID"`
+	ExecMainStatus int    `json:"ExecMainStatus"`
+
+	// Resource usage
+	TasksCurrent uint64 `json:"TasksCurrent"`
+	TasksMax     uint64 `json:"TasksMax"`
+	CPUUsageNSec uint64 `json:"CPUUsageNSec"`
+
+	// Control group
+	ControlGroup string `json:"ControlGroup"`
+
+	// Exec commands (simplified - would need additional processing)
+	ExecStartPre [][]interface{} `json:"ExecStartPre"`
+	ExecStart    [][]interface{} `json:"ExecStart"`
+
+	// Additional fields that might be useful
+	Restart       string `json:"Restart"`
+	MemoryCurrent uint64 `json:"MemoryCurrent"`
+}
+
+type ListUnitsParams struct {
+	States     []string `json:"states,omitempty" jsonschema:"List units in these states. For loaded units (mode='loaded'), these are active/load states (e.g. 'running', 'failed'). For unit files (mode='files'), these are enablement states (e.g. 'enabled', 'disabled')."`
+	Patterns   []string `json:"patterns,omitempty" jsonschema:"List units by their names or patterns (e.g. '*.service')."`
+	Properties bool     `json:"properties,omitempty" jsonschema:"If true, return detailed properties for each unit. Only applies to mode='loaded'."`
+	Verbose    bool     `json:"verbose,omitempty" jsonschema:"Return more details in the response."`
+	Mode       string   `json:"mode,omitempty" jsonschema:"'loaded' (default) to list loaded units (active/inactive), 'files' to list all installed unit files."`
+}
+
+func CreateListUnitsSchema() *jsonschema.Schema {
+	inputSchema, _ := jsonschema.For[ListUnitsParams](nil)
 	var states []any
 	for _, s := range ValidStates() {
 		states = append(states, s)
 	}
-	inputschmema.Properties["state"].Enum = states
-	return inputschmema
+	// Add unit file states to the potential enum list or documentation? 
+	// Since the field is shared, enforcing enum might be tricky if we want to support both sets strictly.
+	// We'll leave it open or combine them if strict validation is needed.
+	// For now, let's allow any string but maybe hint in description.
+	
+	inputSchema.Properties["mode"].Enum = []any{"loaded", "files"}
+	inputSchema.Properties["mode"].Default = json.RawMessage(`"loaded"`)
+
+	return inputSchema
 }
 
-func (conn *Connection) ListUnitState(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitParams) (*mcp.CallToolResult, any, error) {
-	slog.Debug("ListUnitState called", "params", params)
+func (conn *Connection) ListUnits(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitsParams) (*mcp.CallToolResult, any, error) {
+	slog.Debug("ListUnits called", "params", params)
 	allowed, err := conn.auth.IsReadAuthorized()
 	if err != nil {
 		return nil, nil, err
@@ -44,140 +95,71 @@ func (conn *Connection) ListUnitState(ctx context.Context, req *mcp.CallToolRequ
 	if !allowed {
 		return nil, nil, fmt.Errorf("calling method was canceled by user")
 	}
-	reqState := params.State
-	if reqState == "" {
-		reqState = "running"
-	} else {
-		if !slices.Contains(ValidStates(), reqState) {
-			return nil, nil, fmt.Errorf("requested state %s is not a valid state", reqState)
-		}
-	}
-	var units []dbus.UnitStatus
-	// route can't be taken as it confuses small modells
-	if reqState == "all" {
-		units, err = conn.dbus.ListUnitsContext(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-	} else {
-		units, err = conn.dbus.ListUnitsFilteredContext(ctx, []string{reqState})
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	type LightUnit struct {
-		Name        string `json:"name"`
-		State       string `json:"state"`
-		Description string `json:"description"`
+
+	mode := params.Mode
+	if mode == "" {
+		mode = "loaded"
 	}
 
-	txtContenList := []mcp.Content{}
-	for _, u := range units {
-		var jsonByte []byte
-		if params.Verbose {
-			jsonByte, _ = json.Marshal(&u)
+	if mode == "files" {
+		return conn.listUnitFilesInternal(ctx, params)
+	}
+
+	// Mode "loaded"
+	reqStates := []string{}
+	if len(params.States) > 0 {
+		if slices.Contains(params.States, "all") {
+			reqStates = []string{}
 		} else {
-			lightUnit := LightUnit{
-				Name:        u.Name,
-				State:       u.ActiveState,
-				Description: u.Description,
+			reqStates = params.States
+			// Optional: Validate states for loaded mode
+			valid := ValidStates()
+			for _, s := range reqStates {
+				if !slices.Contains(valid, s) {
+					// We warn or error? 
+					// Let's error to be helpful, unless strict validation is off.
+					// But user might mix up states if they don't know the mode.
+					// Let's be lenient or just filter? The underlying dbus call filters.
+					// If we pass invalid state to dbus, it might fail or return nothing.
+					// Let's check validity.
+					if !slices.Contains(valid, s) {
+						return nil, nil, fmt.Errorf("requested state %s is not a valid state for mode 'loaded'", s)
+					}
+				}
 			}
-			jsonByte, _ = json.Marshal(&lightUnit)
 		}
-		txtContenList = append(txtContenList, &mcp.TextContent{
-			Text: string(jsonByte),
-		})
-
+	} else if len(params.Patterns) == 0 {
+		reqStates = []string{"running"}
 	}
 
-	return &mcp.CallToolResult{
-		Content: txtContenList,
-	}, nil, nil
-}
-
-type ListUnitNameParams struct {
-	Names   []string `json:"names" jsonschema:"List units with the given by their names. Regular expressions should be used. The request foo* expands to foo.service. Useful patterns are '*.timer' for all timers, '*.service' for all services, '*.mount for all mounts, '*.socket' for all sockets."`
-	Verbose bool     `json:"verbose,omitempty" jsonschema:"Set to true for more detail. Otherwise set to false."`
-}
-
-/*
-Handler to list the unit by name
-*/
-func (conn *Connection) ListUnitHandlerNameState(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitNameParams) (*mcp.CallToolResult, any, error) {
-	slog.Debug("ListUnitHandlerNameState called", "params", params)
-	allowed, err := conn.auth.IsReadAuthorized()
+	units, err := conn.dbus.ListUnitsByPatternsContext(ctx, reqStates, params.Patterns)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !allowed {
-		return nil, nil, fmt.Errorf("calling method was canceled by user")
-	}
-	reqNames := params.Names
-	// reqStates := request.GetStringSlice("states", []string{""})
-	var units []dbus.UnitStatus
-	units, err = conn.dbus.ListUnitsByPatternsContext(ctx, []string{}, reqNames)
-	if err != nil {
-		return nil, nil, err
-	}
-	// unitProps := make([]map[string]interface{}, 1, 1)
+
 	txtContentList := []mcp.Content{}
-	for _, u := range units {
-		props, err := conn.dbus.GetAllPropertiesContext(ctx, u.Name)
-		if err != nil {
-			return nil, nil, err
-		}
-		props = util.ClearMap(props)
-		jsonByte, err := json.Marshal(&props)
-		if err != nil {
-			return nil, nil, err
-		}
-		if params.Verbose {
-			txtContentList = append(txtContentList, &mcp.TextContent{
-				Text: string(jsonByte),
-			})
-		} else {
-			prop := struct {
-				Id          string `json:"Id"`
-				Description string `json:"Description"`
 
-				// Load state info
-				LoadState      string `json:"LoadState"`
-				FragmentPath   string `json:"FragmentPath"`
-				UnitFileState  string `json:"UnitFileState"`
-				UnitFilePreset string `json:"UnitFilePreset"`
-
-				// Active state info
-				ActiveState          string `json:"ActiveState"`
-				SubState             string `json:"SubState"`
-				ActiveEnterTimestamp uint64 `json:"ActiveEnterTimestamp"`
-
-				// Process info
-				InvocationID   string `json:"InvocationID"`
-				MainPID        int    `json:"MainPID"`
-				ExecMainPID    int    `json:"ExecMainPID"`
-				ExecMainStatus int    `json:"ExecMainStatus"`
-
-				// Resource usage
-				TasksCurrent uint64 `json:"TasksCurrent"`
-				TasksMax     uint64 `json:"TasksMax"`
-				CPUUsageNSec uint64 `json:"CPUUsageNSec"`
-
-				// Control group
-				ControlGroup string `json:"ControlGroup"`
-
-				// Exec commands (simplified - would need additional processing)
-				ExecStartPre [][]interface{} `json:"ExecStartPre"`
-				ExecStart    [][]interface{} `json:"ExecStart"`
-
-				// Additional fields that might be useful
-				Restart       string `json:"Restart"`
-				MemoryCurrent uint64 `json:"MemoryCurrent"`
-			}{}
-			err = json.Unmarshal(jsonByte, &prop)
+	if params.Properties {
+		for _, u := range units {
+			props, err := conn.dbus.GetAllPropertiesContext(ctx, u.Name)
 			if err != nil {
-				return nil, nil, err
+				slog.Warn("failed to get properties for unit", "unit", u.Name, "error", err)
+				continue
 			}
-			jsonByte, err = json.Marshal(&prop)
+			props = util.ClearMap(props)
+			
+			var jsonByte []byte
+			if params.Verbose {
+				jsonByte, err = json.Marshal(&props)
+			} else {
+				prop := UnitProperties{}
+				tmp, _ := json.Marshal(props)
+				if err := json.Unmarshal(tmp, &prop); err != nil {
+					slog.Warn("failed to unmarshal properties", "unit", u.Name, "error", err)
+					continue
+				}
+				jsonByte, err = json.Marshal(&prop)
+			}
 			if err != nil {
 				return nil, nil, err
 			}
@@ -185,19 +167,111 @@ func (conn *Connection) ListUnitHandlerNameState(ctx context.Context, req *mcp.C
 				Text: string(jsonByte),
 			})
 		}
+	} else {
+		type LightUnit struct {
+			Name        string `json:"name"`
+			State       string `json:"state"`
+			Description string `json:"description"`
+		}
 
+		for _, u := range units {
+			var jsonByte []byte
+			if params.Verbose {
+				jsonByte, _ = json.Marshal(&u)
+			} else {
+				lightUnit := LightUnit{
+					Name:        u.Name,
+					State:       u.ActiveState,
+					Description: u.Description,
+				}
+				jsonByte, _ = json.Marshal(&lightUnit)
+			}
+			txtContentList = append(txtContentList, &mcp.TextContent{
+				Text: string(jsonByte),
+			})
+		}
 	}
+
 	if len(txtContentList) == 0 {
-		return nil, nil, fmt.Errorf("found no units with name pattern: %v", reqNames)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "[]"}},
+		}, nil, nil
 	}
+
 	return &mcp.CallToolResult{
 		Content: txtContentList,
 	}, nil, nil
 }
 
+func (conn *Connection) listUnitFilesInternal(ctx context.Context, params *ListUnitsParams) (*mcp.CallToolResult, any, error) {
+	unitList, err := conn.dbus.ListUnitFilesContext(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	txtContentList := []mcp.Content{}
+	
+	// Prepare filters
+	filterStates := len(params.States) > 0 && !slices.Contains(params.States, "all")
+	filterPatterns := len(params.Patterns) > 0
+
+	for _, unit := range unitList {
+		name := path.Base(unit.Path)
+		state := unit.Type // In ListUnitFiles, Type corresponds to enablement state
+
+		// Filter by state
+		if filterStates {
+			if !slices.Contains(params.States, state) {
+				continue
+			}
+		}
+
+		// Filter by pattern
+		if filterPatterns {
+			matched := false
+			for _, pat := range params.Patterns {
+				if match, _ := path.Match(pat, name); match {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		uInfo := struct {
+			Name  string `json:"name"`
+			State string `json:"state"` // changed from Type to State for consistency
+		}{
+			Name:  name,
+			State: state,
+		}
+		jsonByte, err := json.Marshal(uInfo)
+		if err != nil {
+			return nil, nil, fmt.Errorf("could not unmarshall result: %w", err)
+		}
+		txtContentList = append(txtContentList, &mcp.TextContent{
+			Text: string(jsonByte),
+		})
+	}
+	
+	if len(txtContentList) == 0 {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "[]"}},
+		}, nil, nil
+	}
+
+	return &mcp.CallToolResult{
+		Content: txtContentList,
+	}, nil, nil
+}
+
+
+
 // helper function to get the valid states
 func (conn *Connection) ListStatesHandler(ctx context.Context) (lst []string, err error) {
-	units, err := conn.dbus.ListUnitsContext(ctx)
+	units, err := conn.dbus.ListUnitsByPatternsContext(ctx, []string{}, []string{})
 	if err != nil {
 		return
 	}
@@ -297,47 +371,6 @@ func (conn *Connection) CheckForRestartReloadRunning(ctx context.Context, req *m
 			},
 		}, nil, nil
 	}
-}
-
-type ListUnitFilesParams struct {
-	Type []string `json:"types,omitempty" jsonschema:"List of the type which should be returned."`
-}
-
-// returns the unit files known to systemd
-func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitFilesParams) (res *mcp.CallToolResult, _ any, err error) {
-	slog.Debug("ListUnitFiles called", "params", params)
-	allowed, err := conn.auth.IsReadAuthorized()
-	if err != nil {
-		return nil, nil, err
-	}
-	if !allowed {
-		return nil, nil, fmt.Errorf("calling method was canceled by user")
-	}
-	unitList, err := conn.dbus.ListUnitFilesContext(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	txtContentList := []mcp.Content{}
-	for _, unit := range unitList {
-		uInfo := struct {
-			Name string `json:"name"`
-			Type string `json:"type"`
-		}{
-			Name: path.Base(unit.Path),
-			Type: unit.Type,
-		}
-		jsonByte, err := json.Marshal(uInfo)
-		if err != nil {
-			return nil, nil, fmt.Errorf("could not unmarshall result: %w", err)
-		}
-		txtContentList = append(txtContentList, &mcp.TextContent{
-			Text: string(jsonByte),
-		})
-
-	}
-	return &mcp.CallToolResult{
-		Content: txtContentList,
-	}, nil, nil
 }
 
 type ChangeUnitStateParams struct {

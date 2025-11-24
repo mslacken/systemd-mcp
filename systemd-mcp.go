@@ -175,24 +175,12 @@ func main() {
 			}{
 				Tool: &mcp.Tool{
 					Title:       "List units",
-					Name:        "list_systemd_units_by_state",
-					Description: fmt.Sprintf("List the requested systemd units and services on the host with the given state. Does not list the services in other states. As a result the unit name, description and name are listed as json. Valid states are: %v", systemd.ValidStates()),
-					InputSchema: systemd.CreateListInputSchema(),
+					Name:        "list_units",
+					Description: fmt.Sprintf("List systemd units. Filter by states (%v) or patterns. Can return detailed properties. Use mode='files' to list all installed unit files.", systemd.ValidStates()),
+					InputSchema: systemd.CreateListUnitsSchema(),
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
-					mcp.AddTool(server, tool, systemConn.ListUnitState)
-				},
-			},
-			struct {
-				Tool     *mcp.Tool
-				Register func(server *mcp.Server, tool *mcp.Tool)
-			}{
-				Tool: &mcp.Tool{
-					Name:        "list_systemd_units_by_name",
-					Description: "List the requested systemd unit by its names or patterns. The output is a JSON formatted with all available non-empty fields. These are properties of the unit/service.",
-				},
-				Register: func(server *mcp.Server, tool *mcp.Tool) {
-					mcp.AddTool(server, tool, systemConn.ListUnitHandlerNameState)
+					mcp.AddTool(server, tool, systemConn.ListUnits)
 				},
 			},
 			struct {
@@ -218,18 +206,6 @@ func main() {
 				},
 				Register: func(server *mcp.Server, tool *mcp.Tool) {
 					mcp.AddTool(server, tool, systemConn.CheckForRestartReloadRunning)
-				},
-			},
-			struct {
-				Tool     *mcp.Tool
-				Register func(server *mcp.Server, tool *mcp.Tool)
-			}{
-				Tool: &mcp.Tool{
-					Name:        "list_unit_files",
-					Description: "Returns a list of all the unit files known to systemd. This tool can be used to determine the correct unit/service names for other calls.",
-				},
-				Register: func(server *mcp.Server, tool *mcp.Tool) {
-					mcp.AddTool(server, tool, systemConn.ListUnitFiles)
 				},
 			},
 		)

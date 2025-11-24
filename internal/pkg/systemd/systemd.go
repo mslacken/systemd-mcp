@@ -10,8 +10,6 @@ import (
 // DbusConnection is an interface that abstracts the dbus connection.
 // This is primarily for testing purposes.
 type DbusConnection interface {
-	ListUnitsContext(ctx context.Context) ([]dbus.UnitStatus, error)
-	ListUnitsFilteredContext(ctx context.Context, states []string) ([]dbus.UnitStatus, error)
 	ListUnitsByPatternsContext(ctx context.Context, states []string, patterns []string) ([]dbus.UnitStatus, error)
 	GetAllPropertiesContext(ctx context.Context, unitName string) (map[string]interface{}, error)
 	ReloadOrRestartUnitContext(ctx context.Context, name string, mode string, ch chan<- string) (int, error)
