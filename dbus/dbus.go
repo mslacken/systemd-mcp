@@ -51,15 +51,21 @@ func IsDBusNameTaken(dbusName string) (bool, error) {
 
 type AuthKeeper struct {
 	*dbus.Conn
-	sender       dbus.Sender // store the sender which authorized the last call
-	Timeout      uint32
-	ReadAllowed  bool // allow read without auth
-	WriteAllowed bool // allow write without auth
-	DbusName     string
-	DbusPath     string
+	sender             dbus.Sender // store the sender which authorized the last call
+	Timeout            uint32
+	ReadAlwaysAllowed  bool // allow read without auth
+	WriteAlwaysAllowed bool // allow write without auth
+	ReadAllowed        bool // read was allowed by user
+	WriteAllowed       bool // write was allowed by user
+	DbusName           string
+	DbusPath           string
 }
 
-func checkAuth(conn *dbus.Conn, sender dbus.Sender, actionID string) (bool, *dbus.Error) {
+func (a *AuthKeeper) checkDbusAuth(conn *dbus.Conn, sender dbus.Sender, actionID string) (bool, *dbus.Error) {
+	// not sensible to ask root for auth
+	if os.Geteuid() == 0 {
+		return true, nil
+	}
 	subject := struct {
 		A string
 		B map[string]dbus.Variant
@@ -71,6 +77,9 @@ func checkAuth(conn *dbus.Conn, sender dbus.Sender, actionID string) (bool, *dbu
 	}
 	slog.Debug("checking auth", "subject", subject, "actionID", actionID)
 	details := make(map[string]string)
+	if os.Geteuid() == 0 && (strings.Contains(actionID, "AuthWrite") || strings.Contains(actionID, "AuthRead")) {
+		details["polkit.message"] = "Don't touch the blinkenlights"
+	}
 	flags := uint32(1) // AllowUserInteraction
 	cancellationID := ""
 	var result struct {
@@ -103,7 +112,7 @@ func checkAuth(conn *dbus.Conn, sender dbus.Sender, actionID string) (bool, *dbu
 
 // read authorization method exposed to dbus
 func (a *AuthKeeper) AuthRead(sender dbus.Sender) *dbus.Error {
-	_, err := checkAuth(a.Conn, sender, a.DbusName+".AuthRead")
+	_, err := a.checkDbusAuth(a.Conn, sender, a.DbusName+".AuthRead")
 	if err == nil {
 		a.sender = sender
 	}
@@ -112,7 +121,7 @@ func (a *AuthKeeper) AuthRead(sender dbus.Sender) *dbus.Error {
 
 // write authorization method exposed to dbus
 func (a *AuthKeeper) AuthWrite(sender dbus.Sender) *dbus.Error {
-	_, err := checkAuth(a.Conn, sender, a.DbusName+".AuthWrite")
+	_, err := a.checkDbusAuth(a.Conn, sender, a.DbusName+".AuthWrite")
 	if err == nil {
 		a.sender = sender
 	}
@@ -227,36 +236,38 @@ func (a *AuthKeeper) IsLocal() bool {
 // Deauthorize revokes the authorization
 func (a *AuthKeeper) Deauthorize() *dbus.Error {
 	slog.Debug("Deauthorize called")
-	a.WriteAllowed = false
-	if a.sender != "" {
-		sessionID, err := getSessionID(a.Conn)
-		if err != nil {
-			slog.Error("could not get session ID for deauthorization", "error", err)
+	/*
+		a.WriteAlwaysAllowed = false
+		if a.sender != "" {
+			sessionID, err := getSessionID(a.Conn)
+			if err != nil {
+				slog.Error("could not get session ID for deauthorization", "error", err)
+			}
+
+			var subject interface{}
+			subject = struct {
+				A string
+				B map[string]dbus.Variant
+			}{
+				"unix-session",
+				map[string]dbus.Variant{
+					"session-id": dbus.MakeVariant(sessionID),
+				},
+			}
+
+			slog.Debug("revoking auth", "subject", subject)
+
+			pkObj := a.Conn.Object("org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority")
+			err = pkObj.Call("org.freedesktop.PolicyKit1.Authority.RevokeTemporaryAuthorizations", 0,
+				subject).Store()
+
+			if err != nil {
+				// Log warning but do not fail the operation; revocation is best-effort
+				slog.Warn("error revoking polkit authorization (this is expected if systemd-mcp is running as a system service)", "error", err)
+			}
+			a.sender = ""
 		}
-
-		var subject interface{}
-		subject = struct {
-			A string
-			B map[string]dbus.Variant
-		}{
-			"unix-session",
-			map[string]dbus.Variant{
-				"session-id": dbus.MakeVariant(sessionID),
-			},
-		}
-
-		slog.Debug("revoking auth", "subject", subject)
-
-		pkObj := a.Conn.Object("org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority")
-		err = pkObj.Call("org.freedesktop.PolicyKit1.Authority.RevokeTemporaryAuthorizations", 0,
-			subject).Store()
-
-		if err != nil {
-			// Log warning but do not fail the operation; revocation is best-effort
-			slog.Warn("error revoking polkit authorization (this is expected if systemd-mcp is running as a system service)", "error", err)
-		}
-		a.sender = ""
-	}
+	*/
 	return nil
 }
 
@@ -314,32 +325,8 @@ func (a *AuthKeeper) IsReadAuthorized() (bool, error) {
 	if a.ReadAllowed {
 		return true, nil
 	}
-	slog.Debug("checking read auth")
-	if a.sender != "" {
-		slog.Debug("dbus sender", "address", a.sender)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
-		defer cancel()
+	slog.Debug("checking read auth", "address", a.sender)
 
-		state, dbuserr := checkAuth(a.Conn, a.sender, a.DbusName+".AuthRead")
-		if dbuserr != nil {
-			return false, fmt.Errorf("authorization error: %s", dbuserr)
-		}
-		select {
-		case <-ctx.Done():
-			return false, fmt.Errorf("read authorization timed out: %w", ctx.Err())
-		default:
-			return state, nil
-		}
-	}
-	return false, fmt.Errorf("authorize reading by calling: %s --allow-read", getExecutableName())
-}
-
-// Check if write was authorized. Triggers also a call back via
-// dbus if write was authorized at another time
-func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
-	if a.WriteAllowed {
-		return true, nil
-	}
 	// would always succeed if root so skip for root
 	if a.sender == "" && a.IsLocal() && os.Geteuid() != 0 {
 		err := a.Conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, a.DbusName).Store(&a.sender)
@@ -348,16 +335,55 @@ func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
 
 		}
 		slog.Debug("name owner", "sender", a.sender)
-	} else {
+	} else if !a.IsLocal() {
+		return false, fmt.Errorf("read to systemd must authorized externally")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
+	defer cancel()
+
+	state, dbuserr := a.checkDbusAuth(a.Conn, a.sender, a.DbusName+".AuthRead")
+	if dbuserr != nil {
+		state, dbuserr = a.checkDbusAuth(a.Conn, a.sender, "org.freedesktop.systemd1.manage-units")
+		if dbuserr != nil {
+			return false, fmt.Errorf("authorization error: %s", dbuserr)
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		return false, fmt.Errorf("write authorization timed out: %w", ctx.Err())
+	default:
+		return state, nil
+	}
+}
+
+// Check if write was authorized. Triggers also a call back via
+// dbus if write was authorized at another time
+func (a *AuthKeeper) IsWriteAuthorized(systemdPermission string) (bool, error) {
+	if a.WriteAllowed {
+		return true, nil
+	}
+	slog.Debug("checking write auth", "sender", a.sender)
+	// would always succeed if root so skip for root
+	if a.sender == "" && a.IsLocal() && os.Geteuid() != 0 {
+		err := a.Conn.BusObject().Call("org.freedesktop.DBus.GetNameOwner", 0, a.DbusName).Store(&a.sender)
+		if err != nil {
+			return false, fmt.Errorf("could not get unique name for self: %w", err)
+
+		}
+	} else if !a.IsLocal() {
 		return false, fmt.Errorf("write to systemd must authorized externally")
 	}
 	slog.Debug("dbus sender", "address", a.sender)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
 	defer cancel()
 
-	state, dbuserr := checkAuth(a.Conn, a.sender, a.DbusName+".AuthWrite")
+	state, dbuserr := a.checkDbusAuth(a.Conn, a.sender, a.DbusName+".AuthWrite")
 	if dbuserr != nil {
-		state, dbuserr = checkAuth(a.Conn, a.sender, "org.freedesktop.systemd1.manage-units")
+		if systemdPermission == "" {
+			systemdPermission = "org.freedesktop.systemd1.manage-units"
+		}
+		state, dbuserr = a.checkDbusAuth(a.Conn, a.sender, systemdPermission)
 		if dbuserr != nil {
 			return false, fmt.Errorf("authorization error: %s", dbuserr)
 		}
@@ -373,11 +399,12 @@ func (a *AuthKeeper) IsWriteAuthorized() (bool, error) {
 }
 
 // Check if write was authorized for the process itself.
+/*
 func (a *AuthKeeper) IsAuthorizedSelf(actionID string) (bool, error) {
 	if os.Getuid() == 0 {
 		return true, nil
 	}
-	if a.WriteAllowed {
+	if a.WriteAlwaysAllowed {
 		return true, nil
 	}
 	targetAction := actionID
@@ -392,13 +419,13 @@ func (a *AuthKeeper) IsAuthorizedSelf(actionID string) (bool, error) {
 		return false, fmt.Errorf("could not get unique name for self: %w", err)
 	}
 
-	state, dbuserr := checkAuth(a.Conn, dbus.Sender(uniqueName), targetAction)
+	state, dbuserr := a.checkDbusAuth(a.Conn, dbus.Sender(uniqueName), targetAction)
 	if dbuserr != nil {
 		return false, fmt.Errorf("authorization error: %s", dbuserr)
 	}
 	return state, nil
 }
-
+*/
 type ReadAuthArgs struct{}
 
 type IsAuthorizedResult struct {
@@ -427,7 +454,7 @@ func (a *AuthKeeper) IsReadAuthorizedTool(ctx context.Context, req *mcp.CallTool
 func (a *AuthKeeper) IsWriteAuthorizedTool(ctx context.Context, req *mcp.CallToolRequest, args *ReadAuthArgs) (*mcp.CallToolResult, any, error) {
 	slog.Debug("IsWriteAuthorized called", "args", args)
 	result := &IsAuthorizedResult{}
-	state, err := a.IsWriteAuthorized()
+	state, err := a.IsWriteAuthorized("")
 	if err != nil {
 		return nil, nil, err
 	}

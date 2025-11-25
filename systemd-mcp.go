@@ -78,7 +78,7 @@ func main() {
 
 	slog.Debug("Logger initialized", "level", logLevel)
 
-	if (viper.GetBool("allow-read") || viper.GetBool("allow-write") || viper.GetBool("auth-register") || viper.GetBool("internal-agent")) && !viper.GetBool("noauth") {
+	if (viper.GetBool("allow-read") || viper.GetBool("allow-write") || viper.GetBool("auth-register") || viper.GetBool("internal-agent")) && !viper.GetBool("noauth") && viper.GetString("http") == "" {
 		taken, err := dbus.IsDBusNameTaken(DBusName)
 		if err != nil {
 			slog.Error("could not check if dbus name is taken", "error", err)

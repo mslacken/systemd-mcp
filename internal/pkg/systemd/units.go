@@ -75,11 +75,11 @@ func CreateListUnitsSchema() *jsonschema.Schema {
 	for _, s := range ValidStates() {
 		states = append(states, s)
 	}
-	// Add unit file states to the potential enum list or documentation? 
+	// Add unit file states to the potential enum list or documentation?
 	// Since the field is shared, enforcing enum might be tricky if we want to support both sets strictly.
 	// We'll leave it open or combine them if strict validation is needed.
 	// For now, let's allow any string but maybe hint in description.
-	
+
 	inputSchema.Properties["mode"].Enum = []any{"loaded", "files"}
 	inputSchema.Properties["mode"].Default = json.RawMessage(`"loaded"`)
 
@@ -116,7 +116,7 @@ func (conn *Connection) ListUnits(ctx context.Context, req *mcp.CallToolRequest,
 			valid := ValidStates()
 			for _, s := range reqStates {
 				if !slices.Contains(valid, s) {
-					// We warn or error? 
+					// We warn or error?
 					// Let's error to be helpful, unless strict validation is off.
 					// But user might mix up states if they don't know the mode.
 					// Let's be lenient or just filter? The underlying dbus call filters.
@@ -147,7 +147,7 @@ func (conn *Connection) ListUnits(ctx context.Context, req *mcp.CallToolRequest,
 				continue
 			}
 			props = util.ClearMap(props)
-			
+
 			var jsonByte []byte
 			if params.Verbose {
 				jsonByte, err = json.Marshal(&props)
@@ -210,7 +210,7 @@ func (conn *Connection) listUnitFilesInternal(ctx context.Context, params *ListU
 	}
 
 	txtContentList := []mcp.Content{}
-	
+
 	// Prepare filters
 	filterStates := len(params.States) > 0 && !slices.Contains(params.States, "all")
 	filterPatterns := len(params.Patterns) > 0
@@ -255,7 +255,7 @@ func (conn *Connection) listUnitFilesInternal(ctx context.Context, params *ListU
 			Text: string(jsonByte),
 		})
 	}
-	
+
 	if len(txtContentList) == 0 {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: "[]"}},
@@ -266,8 +266,6 @@ func (conn *Connection) listUnitFilesInternal(ctx context.Context, params *ListU
 		Content: txtContentList,
 	}, nil, nil
 }
-
-
 
 // helper function to get the valid states
 func (conn *Connection) ListStatesHandler(ctx context.Context) (lst []string, err error) {
@@ -338,7 +336,8 @@ type CheckReloadRestartParams struct {
 // check status of reload or restart
 func (conn *Connection) CheckForRestartReloadRunning(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("CheckForRestartReloadRunning called", "params", params)
-	allowed, err := conn.auth.IsAuthorizedSelf("org.freedesktop.systemd1.manage-units")
+
+	allowed, err := conn.auth.IsWriteAuthorized("")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -411,12 +410,13 @@ func (conn *Connection) ChangeUnitState(ctx context.Context, req *mcp.CallToolRe
 	slog.Debug("ChangeUnitState called", "params", params)
 
 	var permission string
-	if params.Action == "enable" || params.Action == "disable" {
+	if params.Action == "enable" || params.Action == "enable_force" || params.Action == "disable" {
 		permission = "org.freedesktop.systemd1.manage-unit-files"
 	} else {
 		permission = "org.freedesktop.systemd1.manage-units"
 	}
-	allowed, err := conn.auth.IsAuthorizedSelf(permission)
+
+	allowed, err := conn.auth.IsWriteAuthorized(permission)
 	defer conn.auth.Deauthorize()
 	if err != nil {
 		return nil, nil, err
@@ -451,6 +451,7 @@ func (conn *Connection) ChangeUnitState(ctx context.Context, req *mcp.CallToolRe
 	case "enable", "enable_force":
 		_, enabledRes, err := conn.dbus.EnableUnitFilesContext(ctx, []string{params.Name}, params.Runtime, strings.HasSuffix(params.Action, "_force"))
 		if err != nil {
+			slog.Error("error when enabling", "dbus.error", err)
 			return nil, nil, fmt.Errorf("error when enabling: %w", err)
 		}
 		if len(enabledRes) == 0 {
