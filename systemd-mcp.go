@@ -17,6 +17,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/man"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/systemd"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -233,6 +234,24 @@ func main() {
 			},
 		})
 	}
+
+	tools = append(tools, struct {
+		Tool     *mcp.Tool
+		Register func(server *mcp.Server, tool *mcp.Tool)
+	}{
+		Tool: &mcp.Tool{
+			Name:        "get_man_page",
+			Description: "Retrieve a man page. Supports filtering by section and chapters, and pagination.",
+			InputSchema: man.CreateManPageSchema(),
+		},
+		Register: func(server *mcp.Server, tool *mcp.Tool) {
+			mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *man.GetManPageParams) (*mcp.CallToolResult, any, error) {
+				slog.Debug("get_man_page called", "args", args)
+				res, out, err := man.GetManPage(ctx, req, args)
+				return res, out, err
+			})
+		},
+	})
 
 	var allTools []string
 	for _, tool := range tools {
