@@ -222,11 +222,13 @@ func main() {
 			Tool: &mcp.Tool{
 				Name:        "list_log",
 				Description: descriptionJournal,
+				InputSchema: journal.CreateListLogsSchema(),
 			},
 			Register: func(server *mcp.Server, tool *mcp.Tool) {
 				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *journal.ListLogParams) (*mcp.CallToolResult, any, error) {
 					slog.Debug("list_log called", "args", args)
-					return log.ListLog(ctx, req, args)
+					res, out, err := log.ListLog(ctx, req, args)
+					return res, out, err
 				})
 			},
 		})

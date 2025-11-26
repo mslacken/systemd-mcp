@@ -75,10 +75,6 @@ func CreateListUnitsSchema() *jsonschema.Schema {
 	for _, s := range ValidStates() {
 		states = append(states, s)
 	}
-	// Add unit file states to the potential enum list or documentation?
-	// Since the field is shared, enforcing enum might be tricky if we want to support both sets strictly.
-	// We'll leave it open or combine them if strict validation is needed.
-	// For now, let's allow any string but maybe hint in description.
 
 	inputSchema.Properties["mode"].Enum = []any{"loaded", "files"}
 	inputSchema.Properties["mode"].Default = json.RawMessage(`"loaded"`)
