@@ -10,18 +10,20 @@
     <description>Read access to the systemd-mcp service</description>
     <message>Authentication is required for read access to the systemd-mcp service</message>
     <defaults>
-      <allow_any>auth_admin</allow_any>
-      <allow_inactive>auth_admin</allow_inactive>
+      <allow_any>auth_admini_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
       <allow_active>auth_admin_keep</allow_active>
     </defaults>
+   <annotate key="org.freedesktop.policykit.imply">org.freedesktop.systemd1.manage-units</annotate>
   </action>
   <action id="org.opensuse.systemdmcp.AuthWrite">
     <description>Write access to the systemd-mcp service</description>
     <message>Authentication is required for write access to the systemd-mcp service</message>
     <defaults>
-      <allow_any>auth_admin</allow_any>
-      <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin</allow_active>
-    </defaults>
+      <allow_any>auth_admin_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+   </defaults>
+   <annotate key="org.freedesktop.policykit.imply">org.freedesktop.systemd1.manage-units</annotate>
   </action>
 </policyconfig>
