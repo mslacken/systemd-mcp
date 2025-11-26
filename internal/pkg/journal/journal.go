@@ -1,11 +1,17 @@
 package journal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -42,19 +48,28 @@ type ListLogParams struct {
 
 type LogOutput struct {
 	Time       time.Time `json:"time"`
-	Identifier string    `json:"identifier"`
-	UnitName   string    `json:"unit_name"`
+	Identifier string    `json:"identifier,omitempty"`
+	UnitName   string    `json:"unit_name,omitempty"`
+	ExeName    string    `json:"exe_name,omitempty"`
 	Host       string    `json:"host,omitempty"`
 	Msg        string    `json:"message"`
 	Boot       string    `json:"bootid,omitempty"`
+}
+
+type ManPage struct {
+	Name        string `json:"name"`
+	Section     uint   `json:"section"`
+	Description string `json:"description"`
 }
 
 type ListLogResult struct {
 	Host          string      `json:"host"`
 	NrMessages    int         `json:"nr_messages"`
 	Hint          string      `json:"hint,omitempty"`
-	Documentation string      `json:"documentation,omitempty"`
+	Documentation []ManPage   `json:"documentation,omitempty"`
 	Messages      []LogOutput `json:"messages"`
+	Identifier    string      `json:"identifier,omitempty"`
+	UnitName      string      `json:"unit_name,omitempty"`
 }
 
 func CreateListLogsSchema() *jsonschema.Schema {
@@ -149,6 +164,11 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 	}
 
 	var messages []LogOutput
+	uniqIdentifiers := make(map[string]bool)
+	uniqIdentifiersStr := ""
+	uniqUnitName := make(map[string]bool)
+	uniqUnitNameStr := ""
+	uniqExeName := make(map[string]bool)
 	host, _ := os.Hostname()
 
 	for {
@@ -162,8 +182,22 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		structEntr := LogOutput{
 			Identifier: entry.Fields["SYSLOG_IDENTIFIER"],
 			UnitName:   entry.Fields["_SYSTEMD_UNIT"],
+			ExeName:    entry.Fields["_EXE"],
 			Time:       timestamp,
 			Msg:        entry.Fields["MESSAGE"],
+		}
+		if _, ok := uniqIdentifiers[entry.Fields["SYSLOG_IDENTIFIER"]]; !ok {
+			uniqIdentifiers[entry.Fields["SYSLOG_IDENTIFIER"]] = true
+			uniqIdentifiersStr = entry.Fields["SYSLOG_IDENTIFIER"]
+		}
+		if _, ok := uniqUnitName[entry.Fields["_SYSTEMD_UNIT"]]; !ok {
+			uniqUnitName[entry.Fields["_SYSTEMD_UNIT"]] = true
+			uniqUnitNameStr = entry.Fields["_SYSTEMD_UNIT"]
+		}
+		if entry.Fields["_EXE"] != "" {
+			if _, ok := uniqExeName[entry.Fields["_EXE"]]; !ok {
+				uniqExeName[entry.Fields["_EXE"]] = true
+			}
 		}
 		if params.AllBoots {
 			structEntr.Boot = entry.Fields["_BOOT_ID"]
@@ -189,6 +223,85 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		Host:       host,
 		NrMessages: len(messages),
 		Messages:   messages,
+	}
+	if len(uniqIdentifiers) == 1 {
+		res.Identifier = uniqIdentifiersStr
+		for i := range messages {
+			messages[i].Identifier = ""
+		}
+	}
+	if len(uniqUnitName) == 1 {
+		res.UnitName = uniqUnitNameStr
+		for i := range messages {
+			messages[i].UnitName = ""
+		}
+	}
+	if params.Unit != "" {
+		for exe := range uniqExeName {
+			if exe == "" {
+				continue
+			}
+			cmd := exec.Command("rpm", "-qdf", exe)
+			var out bytes.Buffer
+			cmd.Stdout = &out
+			err := cmd.Run()
+			if err != nil {
+				slog.Debug("rpm command failed", "exe", exe, "err", err)
+				continue
+			}
+
+			docLines := make(map[string]bool)
+			for _, doc := range strings.Split(out.String(), "\n") {
+				if ok := docLines[doc]; !ok {
+					docLines[doc] = true
+				}
+			}
+
+			// for splitting the output of man -f
+			reMan := regexp.MustCompile(`^(\S+)\s+\(([^)]+)\)\s+-\s+(.*)$`)
+			for name := range docLines {
+				if !strings.Contains(name, "/man/man") {
+					continue
+				}
+				manPageFile := filepath.Base(name)
+				cmdMan := exec.Command("man", "-f", strings.Split(manPageFile, ".")[0])
+				var outMan bytes.Buffer
+				cmdMan.Stdout = &outMan
+				if err := cmdMan.Run(); err != nil {
+					slog.Debug("man command failed", "name", name, "err", err)
+					continue
+				}
+				for _, line := range strings.Split(strings.TrimSpace(outMan.String()), "\n") {
+					matches := reMan.FindStringSubmatch(line)
+					if len(matches) == 4 {
+						secStr := matches[2]
+						secDigits := ""
+						for _, r := range secStr {
+							if r >= '0' && r <= '9' {
+								secDigits += string(r)
+							} else {
+								break
+							}
+						}
+
+						if secDigits == "" {
+							continue
+						}
+
+						sec, err := strconv.ParseUint(secDigits, 10, 32)
+						if err != nil {
+							continue
+						}
+
+						res.Documentation = append(res.Documentation, ManPage{
+							Name:        matches[1],
+							Section:     uint(sec),
+							Description: matches[3],
+						})
+					}
+				}
+			}
+		}
 	}
 
 	jsonBytes, err := json.Marshal(res)
