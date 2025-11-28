@@ -122,7 +122,6 @@ func (sj *HostLog) ListLogTimeout(ctx context.Context, req *mcp.CallToolRequest,
 
 // get the lat log entries for a given unit, else just the last messages
 func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
-	slog.Debug("ListLog called", "params", params)
 	allowed, err := sj.auth.IsReadAuthorized()
 	if err != nil {
 		return nil, nil, err
@@ -316,4 +315,38 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 			},
 		},
 	}, nil, nil
+}
+
+// CanAccessLogs checks if the current process has permission to access system logs.
+// It returns true if the process is running as root or has CAP_DAC_OVERRIDE capability.
+func CanAccessLogs() bool {
+	// Check if running as root
+	if os.Geteuid() == 0 {
+		return true
+	}
+
+	// Check for CAP_DAC_OVERRIDE (capability 1)
+	// Read /proc/self/status
+	data, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return false
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "CapEff:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				// CapEff is in hex
+				val, err := strconv.ParseUint(fields[1], 16, 64)
+				if err != nil {
+					return false
+				}
+				// CAP_DAC_OVERRIDE is 1 (1 << 1)
+				return (val & (1 << 1)) != 0
+			}
+		}
+	}
+
+	return false
 }
