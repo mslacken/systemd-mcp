@@ -377,7 +377,7 @@ type ChangeUnitStateParams struct {
 }
 
 func ValidChanges() []string {
-	return []string{"restart", "restart_force", "stop", "stop_kill", "reload", "enable", "enable_force", "disable"}
+	return []string{"restart", "restart_force", "start", "stop", "stop_kill", "reload", "enable", "enable_force", "disable"}
 }
 func ValidModes() []string {
 	return []string{"replace", "fail", "isolate", "ignore-dependencies", "ignore-requirements"}

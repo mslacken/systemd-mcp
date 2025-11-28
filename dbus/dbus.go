@@ -283,7 +283,7 @@ func SetupDBus(dbusName, dbusPath string) (*AuthKeeper, error) {
 
 	keeper := &AuthKeeper{
 		Conn:     conn,
-		Timeout:  5,
+		Timeout:  30,
 		DbusName: dbusName,
 		DbusPath: dbusPath,
 	}
@@ -341,14 +341,16 @@ func (a *AuthKeeper) IsReadAuthorized() (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
 	defer cancel()
 
-	state, dbuserr := a.checkDbusAuth(a.Conn, a.sender, a.DbusName+".AuthRead")
-	if dbuserr != nil {
-		state, dbuserr = a.checkDbusAuth(a.Conn, a.sender, "org.freedesktop.systemd1.manage-units")
-		if dbuserr != nil {
-			return false, fmt.Errorf("authorization error: %s", dbuserr)
-		}
+	state, err := a.checkDbusAuth(a.Conn, a.sender, a.DbusName+".AuthRead")
+	if err != nil {
+		return false, fmt.Errorf("couldn't get read authorization: %s", err)
 	}
-
+	/*
+		state, err = a.checkDbusAuth(a.Conn, a.sender, "org.freedesktop.systemd1.manage-units")
+		if err != nil {
+			return false, fmt.Errorf("couldn't get a: %s", err)
+		}
+	*/
 	select {
 	case <-ctx.Done():
 		return false, fmt.Errorf("write authorization timed out: %w", ctx.Err())

@@ -122,7 +122,6 @@ func (sj *HostLog) ListLogTimeout(ctx context.Context, req *mcp.CallToolRequest,
 
 // get the lat log entries for a given unit, else just the last messages
 func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
-	slog.Debug("ListLog called", "params", params)
 	allowed, err := sj.auth.IsReadAuthorized()
 	if err != nil {
 		return nil, nil, err
@@ -316,4 +315,22 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 			},
 		},
 	}, nil, nil
+}
+
+// CanAccessLogs checks if the current process has permission to access system logs.
+// It returns true if the process is running as root or can successfully open the systemd journal.
+func CanAccessLogs() bool {
+	// Check if running as root
+	if os.Geteuid() == 0 {
+		return true
+	}
+
+	// Attempt to open the journal to check for access.
+	// If NewJournal succeeds, it means the process has access to the log files.
+	j, err := sdjournal.NewJournal()
+	if err != nil {
+		return false
+	}
+	defer j.Close()
+	return true
 }
