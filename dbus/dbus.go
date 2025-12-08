@@ -315,7 +315,7 @@ func SetupDBus(dbusName, dbusPath string) (*AuthKeeper, error) {
 		conn.Close()
 		return nil, fmt.Errorf("dbus name already taken")
 	}
-	slog.Info("Listening on dbus", "name", dbusName)
+	slog.Debug("Listening on dbus", "name", dbusName)
 	return keeper, nil
 }
 
