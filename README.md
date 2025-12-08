@@ -78,15 +78,12 @@ Interacting with `systemd` requires root privileges. `systemd-mcp` is designed w
 # Functionality
 
 Following tools are provided:
-* `list_systemd_units_by_state` which lists the units in the given state, also all states can be listed
-* `list_systemd_units_by_name` which lists the units given by their pattern
-* `restart_reload_unit` which restarts or reloads a unit
-* `start_unit` starts a unit
-* `stop_unit` stops a unit
-* `check_restart_reload` check the state of reload or restart
-* `enable_or_disable_unit` enables or disables a unit
-* `list_unit_files` which lists the unit files known to systemd
-* `list_log` which has access to the system log, with various filters
+* `list_units`: List systemd units. Filter by states (e.g. `running`, `failed`) or patterns. Can return detailed properties. Use `mode='files'` to list all installed unit files.
+* `change_unit_state`: Change the state of a unit or service (start, stop, restart, reload, enable, disable).
+* `check_restart_reload`: Check the reload or restart status of a unit. Can only be called if the restart or reload job timed out.
+* `list_log`: Get the last log entries for the given service or unit.
+* `get_file`: Read a file from the system. Can show content and metadata. Supports pagination for large files.
+* `get_man_page`: Retrieve a man page. Supports filtering by section and chapters, and pagination.
 
 # Testing
 
