@@ -16,9 +16,9 @@ import (
 	godbus "github.com/godbus/dbus/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openSUSE/systemd-mcp/dbus"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/file"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/man"
-	"github.com/openSUSE/systemd-mcp/internal/pkg/file"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/systemd"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -101,7 +101,7 @@ func main() {
 					slog.Error("failed to authorize read", "error", call.Err)
 					os.Exit(1)
 				}
-				slog.Info("Read access authorized")
+				slog.Debug("Read access authorized")
 			}
 			if viper.GetBool("allow-write") {
 				call := obj.Call(DBusName+".AuthWrite", 0)
@@ -109,7 +109,7 @@ func main() {
 					slog.Error("failed to authorize write", "error", call.Err)
 					os.Exit(1)
 				}
-				slog.Info("Write access authorized")
+				slog.Debug("Write access authorized")
 			}
 			if viper.GetBool("auth-register") || viper.GetBool("internal-agent") {
 				call := obj.Call(DBusName+".AuthRegister", 0)
@@ -117,7 +117,7 @@ func main() {
 					slog.Error("failed to register for auth call backs", "error", call.Err)
 					os.Exit(1)
 				}
-				slog.Info("Registered for auth call backs")
+				slog.Debug("Registered for auth call backs")
 			}
 			if viper.GetBool("internal-agent") {
 				cmd := exec.Command("pkttyagent", "--process", fmt.Sprintf("%d", os.Getpid()))
@@ -129,7 +129,7 @@ func main() {
 					os.Exit(1)
 				}
 			} else {
-				slog.Info("Press Ctrl+C to exit and cancel authorizations.")
+				slog.Debug("Press Ctrl+C to exit and cancel authorizations.")
 				sigs := make(chan os.Signal, 1)
 				signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 				<-sigs
@@ -307,10 +307,10 @@ func main() {
 		handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 			return server
 		}, nil)
-		slog.Info("MCP handler listening at", slog.String("address", viper.GetString("http")))
+		slog.Debug("MCP handler listening at", slog.String("address", viper.GetString("http")))
 		http.ListenAndServe(viper.GetString("http"), handler)
 	} else {
-		slog.Info("New client has connected via stdin/stdout")
+		slog.Debug("New client has connected via stdin/stdout")
 		if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 			slog.Error("Server failed", slog.Any("error", err))
 		}
