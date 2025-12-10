@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/coreos/go-systemd/v22/dbus"
-	dbus_pkg "github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	dbus_pkg "github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/stretchr/testify/assert"
 )
 
