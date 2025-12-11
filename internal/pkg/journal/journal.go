@@ -82,7 +82,7 @@ func CreateListLogsSchema() *jsonschema.Schema {
 	inputSchema.Properties["offset"].Default = json.RawMessage(`0`)
     inputSchema.Properties["from"].Default = json.RawMessage(`""`)
     inputSchema.Properties["to"].Default = json.RawMessage(`""`)
-    inputSchema.Properties["pattern"].Default = json.RawMessage(`""`)
+    // inputSchema.Properties["pattern"].Default = json.RawMessage(`""`)
 
 	return inputSchema
 }
@@ -93,14 +93,14 @@ func (sj *HostLog) seekAndSkip(count uint64, offset uint64) (uint64, error) {
 	}
 	// Skip offset entries first
 	if offset > 0 {
-		if _, err := sj.journal.PreviousSkip(offset); err != nil {
+		if skip_Offset, err := sj.journal.PreviousSkip(offset); err != nil {
 			return 0, fmt.Errorf("failed to skip offset entries: %w", err)
 		}
 	}
 	if skip, err := sj.journal.PreviousSkip(count); err != nil {
 		return 0, fmt.Errorf("failed to move back entries: %w", err)
 	} else {
-		return skip, nil
+		return skip_Offset + skip, nil
 	}
 }
 
@@ -262,8 +262,7 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 	var regexPattern *regexp.Regexp
 	if params.Pattern != "" {
 		var err error
-		// Compile with case-insensitive flag
-		regexPattern, err = regexp.Compile("(?i)" + params.Pattern)
+		regexPattern, err = regexp.Compile(params.Pattern)
 		if err != nil {
 			return nil, nil, fmt.Errorf("invalid regex pattern: %w", err)
 		}
