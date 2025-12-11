@@ -43,9 +43,9 @@ func (log *HostLog) Close() error {
 type ListLogParams struct {
 	Count    int    `json:"count,omitempty" jsonschema:"Number of log lines to output"`
 	Offset   int    `json:"offset,omitempty" jsonschema:"Number of newest log entries to skip for pagination"`
-	From     string `json:"from,omitempty" jsonschema:"Start time for filtering logs (RFC3339 format, e.g., '2023-01-01T00:00:00Z'). If not specified, no lower time limit is applied."`
-	To       string `json:"to,omitempty" jsonschema:"End time for filtering logs (RFC3339 format, e.g., '2023-01-01T23:59:59Z'). If not specified, no upper time limit is applied."`
-	Pattern  string `json:"pattern,omitempty" jsonschema:"Regular expression pattern to filter log messages. Only messages matching this regex will be included. Case-insensitive matching."`
+	From     string `json:"from,omitempty" jsonschema:"Start time for filtering logs"`
+	To       string `json:"to,omitempty" jsonschema:"End time for filtering logs "`
+	Pattern  string `json:"pattern,omitempty" jsonschema:"Regular expression pattern to filter log messages."`
 	Unit     string `json:"unit,omitempty" jsonschema:"Exact name of the service/unit from which to get the logs. Without an unit name the entries of all units are returned. This parameter is optional."`
 	AllBoots bool   `json:"allboots,omitempty" jsonschema:"Get the log entries from all boots, not just the active one"`
 }
@@ -80,9 +80,9 @@ func CreateListLogsSchema() *jsonschema.Schema {
 	inputSchema, _ := jsonschema.For[ListLogParams](nil)
 	inputSchema.Properties["count"].Default = json.RawMessage(`100`)
 	inputSchema.Properties["offset"].Default = json.RawMessage(`0`)
-	inputSchema.Properties["from"].Format = "date-time"
-	inputSchema.Properties["to"].Format = "date-time"
-	inputSchema.Properties["pattern"].Pattern = ".*"
+    inputSchema.Properties["from"].Default = json.RawMessage(`""`)
+    inputSchema.Properties["to"].Default = json.RawMessage(`""`)
+    inputSchema.Properties["pattern"].Default = json.RawMessage(`""`)
 
 	return inputSchema
 }
@@ -91,13 +91,12 @@ func (sj *HostLog) seekAndSkip(count uint64, offset uint64) (uint64, error) {
 	if err := sj.journal.SeekTail(); err != nil {
 		return 0, fmt.Errorf("failed to seek to end: %w", err)
 	}
-	// Skip offset entries first (for pagination)
+	// Skip offset entries first
 	if offset > 0 {
 		if _, err := sj.journal.PreviousSkip(offset); err != nil {
 			return 0, fmt.Errorf("failed to skip offset entries: %w", err)
 		}
 	}
-	// Then skip count entries to position for reading
 	if skip, err := sj.journal.PreviousSkip(count); err != nil {
 		return 0, fmt.Errorf("failed to move back entries: %w", err)
 	} else {
@@ -106,7 +105,6 @@ func (sj *HostLog) seekAndSkip(count uint64, offset uint64) (uint64, error) {
 }
 
 func (sj *HostLog) seekByTimeRange(params *ListLogParams) error {
-	// Parse time parameters
 	var fromTime, toTime time.Time
 	var err error
 
@@ -131,15 +129,12 @@ func (sj *HostLog) seekByTimeRange(params *ListLogParams) error {
 		}
 	}
 
-	// Seek to the appropriate time range
 	if params.To != "" {
-		// Seek to the 'to' time (upper bound)
 		toMicros := uint64(toTime.UnixNano() / 1000)
 		if err := sj.journal.SeekRealtimeUsec(toMicros); err != nil {
 			return fmt.Errorf("failed to seek to time range: %w", err)
 		}
 	} else {
-		// No upper bound, seek to tail
 		if err := sj.journal.SeekTail(); err != nil {
 			return fmt.Errorf("failed to seek to end: %w", err)
 		}
@@ -245,7 +240,6 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 	uniqExeName := make(map[string]bool)
 	host, _ := os.Hostname()
 
-	// Parse time filters for comparison
 	var fromTime, toTime time.Time
 	var hasFromFilter, hasToFilter bool
 	if params.From != "" {
@@ -265,7 +259,6 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		hasToFilter = true
 	}
 
-	// Compile regex pattern if provided
 	var regexPattern *regexp.Regexp
 	if params.Pattern != "" {
 		var err error
@@ -279,7 +272,7 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 	collectedCount := 0
 	maxCount := params.Count
 	if maxCount <= 0 {
-		maxCount = 100 // default
+		maxCount = 100
 	}
 
 	for {
@@ -290,9 +283,8 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 
 		timestamp := time.Unix(0, int64(entry.RealtimeTimestamp)*int64(time.Microsecond))
 
-		// Apply time filtering
 		if hasFromFilter && timestamp.Before(fromTime) {
-			// Skip entries before the from time
+		
 			ret, err := sj.journal.Next()
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
@@ -304,7 +296,6 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		}
 
 		if hasToFilter && timestamp.After(toTime) {
-			// Skip entries after the to time
 			ret, err := sj.journal.Next()
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
@@ -315,11 +306,9 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 			continue
 		}
 
-		// Apply regex pattern filtering
 		if regexPattern != nil {
 			message := entry.Fields["MESSAGE"]
 			if !regexPattern.MatchString(message) {
-				// Skip entries that don't match the pattern
 				ret, err := sj.journal.Next()
 				if err != nil {
 					return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
@@ -363,7 +352,6 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		messages = append(messages, structEntr)
 		collectedCount++
 
-		// Stop when we reach the count limit
 		if collectedCount >= maxCount {
 			break
 		}
