@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,14 +15,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/MicahParks/keyfunc/v3"
 	"github.com/cheynewallace/tabby"
 	godbus "github.com/godbus/dbus/v5"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/file"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/man"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/systemd"
+	"github.com/openSUSE/systemd-mcp/remoteauth"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
@@ -29,12 +34,18 @@ import (
 const (
 	DBusName = "org.opensuse.systemdmcp"
 	DBusPath = "/org/opensuse/systemdmcp"
+	mcpPath  = "/mcp"
 )
+
+func systemdScopes() []string {
+	return []string{"mcp:read"}
+}
 
 func main() {
 	// DO NOT SET DEFAULTS HERE
 	pflag.String("http", "", "if set, use streamable HTTP at this address, instead of stdin/stdout")
 	pflag.String("logfile", "", "if set, log to this file instead of stderr")
+	pflag.String("controller", "c", "ouath2 controller address")
 	pflag.BoolP("verbose", "v", false, "Enable verbose logging")
 	pflag.BoolP("debug", "d", false, "Enable debug logging")
 	pflag.Bool("log-json", false, "Output logs in JSON format (machine-readable)")
@@ -140,7 +151,7 @@ func main() {
 		}
 	}
 	AuthKeeper := &dbus.AuthKeeper{}
-	if !viper.GetBool("noauth") {
+	if !viper.GetBool("noauth") && viper.GetString("controller") == "" {
 		var err error
 		AuthKeeper, err = dbus.SetupDBus(DBusName, DBusPath)
 		if err != nil {
@@ -273,33 +284,33 @@ func main() {
 			})
 		},
 	},
-	struct {
-		Tool     *mcp.Tool
-		Register func(server *mcp.Server, tool *mcp.Tool)
-	}{
-		Tool: &mcp.Tool{
-			Name:        "get_current_system_time",
-			Description: "Returns the current system time including time zone information in a format compatible with ListLogParams.",
-			InputSchema: nil,
-		},
-		Register: func(server *mcp.Server, tool *mcp.Tool) {
-			mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *struct{}) (*mcp.CallToolResult, any, error) {
-				slog.Debug("get_current_system_time called")
-				currentTime := time.Now()
-				jsonBytes, err := json.Marshal(currentTime.Format(time.RFC3339))
-				if err != nil {
-					return nil, nil, fmt.Errorf("failed to marshal current time: %w", err)
-				}
-				return &mcp.CallToolResult{
-					Content: []mcp.Content{
-						&mcp.TextContent{
-							Text: string(jsonBytes),
+		struct {
+			Tool     *mcp.Tool
+			Register func(server *mcp.Server, tool *mcp.Tool)
+		}{
+			Tool: &mcp.Tool{
+				Name:        "get_current_system_time",
+				Description: "Returns the current system time including time zone information in a format compatible with ListLogParams.",
+				InputSchema: nil,
+			},
+			Register: func(server *mcp.Server, tool *mcp.Tool) {
+				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *struct{}) (*mcp.CallToolResult, any, error) {
+					slog.Debug("get_current_system_time called")
+					currentTime := time.Now()
+					jsonBytes, err := json.Marshal(currentTime.Format(time.RFC3339))
+					if err != nil {
+						return nil, nil, fmt.Errorf("failed to marshal current time: %w", err)
+					}
+					return &mcp.CallToolResult{
+						Content: []mcp.Content{
+							&mcp.TextContent{
+								Text: string(jsonBytes),
+							},
 						},
-					},
-				}, currentTime, nil
-			})
-		},
-	})
+					}, currentTime, nil
+				})
+			},
+		})
 
 	var allTools []string
 	for _, tool := range tools {
@@ -332,12 +343,69 @@ func main() {
 		}
 	}
 
-	if viper.GetString("http") != "" {
+	if httpAddr := viper.GetString("http"); httpAddr != "" {
 		handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 			return server
 		}, nil)
-		slog.Debug("MCP handler listening at", slog.String("address", viper.GetString("http")))
-		http.ListenAndServe(viper.GetString("http"), handler)
+		if viper.GetBool("noauth") {
+			slog.Debug("MCP handler listening at", slog.String("address", httpAddr))
+			http.ListenAndServe(httpAddr, handler)
+		} else {
+			controller := viper.GetString("controller")
+			if controller == "" {
+				panic("no ouath2 controller set")
+			}
+			jwksURI, err := remoteauth.GetJwksURI(controller)
+			if err != nil {
+				// slog.Error("getting JWKS URI: %v", err)
+				panic(err)
+			}
+
+			// starts a goroutine in background to download JWK Set and keep it refreshed
+			keyFunc, err := keyfunc.NewDefaultCtx(context.Background(), []string{jwksURI})
+			if err != nil {
+				log.Panicf("creating keyfunc: %v", err)
+			}
+
+			verifier := remoteauth.Verifier{
+				KeyFunc: keyFunc,
+			}
+
+			authMiddleware := auth.RequireBearerToken(verifier.VerifyJWT, &auth.RequireBearerTokenOptions{
+				ResourceMetadataURL: "http://" + httpAddr + remoteauth.DefaultProtectedResourceMetadataURI,
+				Scopes:              systemdScopes(),
+			})
+
+			authenticatedHandler := authMiddleware(handler)
+			http.HandleFunc(mcpPath, authenticatedHandler.ServeHTTP)
+			// handler for resourceMetaURL
+			// TODO: replace with https://github.com/modelcontextprotocol/go-sdk/pull/643 after it's merged
+			http.HandleFunc(remoteauth.DefaultProtectedResourceMetadataURI+mcpPath, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Access-Control-Allow-Origin", "*")                     // for mcp-inspector
+				w.Header().Set("Access-Control-Allow-Headers", "mcp-protocol-version") // for mcp-inspector
+				prm := &oauthex.ProtectedResourceMetadata{
+					Resource:               "http://" + httpAddr + mcpPath,
+					AuthorizationServers:   []string{controller},
+					ScopesSupported:        systemdScopes(),
+					BearerMethodsSupported: []string{"header"},
+					JWKSURI:                jwksURI,
+				}
+				if err := json.NewEncoder(w).Encode(prm); err != nil {
+					log.Panic(err)
+				}
+			})
+
+			log.Print("MCP server listening on ", httpAddr+mcpPath)
+			s := &http.Server{
+				Addr:              httpAddr,
+				ReadHeaderTimeout: 3 * time.Second,
+			}
+			if err := s.ListenAndServe(); err != nil {
+				panic(err)
+			}
+
+		}
 	} else {
 		slog.Debug("New client has connected via stdin/stdout")
 		if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
