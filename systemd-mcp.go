@@ -21,7 +21,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
-	"github.com/openSUSE/systemd-mcp/dbus"
+	"github.com/openSUSE/systemd-mcp/authkeeper"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/file"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/man"
@@ -94,7 +94,7 @@ func main() {
 	slog.Debug("Logger initialized", "level", logLevel)
 
 	if (viper.GetBool("allow-read") || viper.GetBool("allow-write") || viper.GetBool("auth-register") || viper.GetBool("internal-agent")) && !viper.GetBool("noauth") && viper.GetString("http") == "" {
-		taken, err := dbus.IsDBusNameTaken(DBusName)
+		taken, err := authkeeper.IsDBusNameTaken(DBusName)
 		if err != nil {
 			slog.Error("could not check if dbus name is taken", "error", err)
 			os.Exit(1)
@@ -150,10 +150,10 @@ func main() {
 			os.Exit(0)
 		}
 	}
-	AuthKeeper := &dbus.AuthKeeper{}
+	AuthKeeper := &authkeeper.AuthKeeper{}
 	if !viper.GetBool("noauth") && viper.GetString("controller") == "" {
 		var err error
-		AuthKeeper, err = dbus.SetupDBus(DBusName, DBusPath)
+		AuthKeeper, err = authkeeper.SetupDBus(DBusName, DBusPath)
 		if err != nil {
 			slog.Error("failed to setup dbus", "error", err)
 			os.Exit(1)
@@ -362,16 +362,19 @@ func main() {
 			}
 
 			// starts a goroutine in background to download JWK Set and keep it refreshed
-			keyFunc, err := keyfunc.NewDefaultCtx(context.Background(), []string{jwksURI})
+			authCtx := context.Background()
+			AuthKeeper.KeyFunc, err = keyfunc.NewDefaultCtx(authCtx, []string{jwksURI})
 			if err != nil {
-				log.Panicf("creating keyfunc: %v", err)
+				panic(err)
 			}
 
-			verifier := remoteauth.Verifier{
-				KeyFunc: keyFunc,
-			}
+			/*
+				verifier := remoteauth.Verifier{
+					KeyFunc: keyFunc,
+				}
+			*/
 
-			authMiddleware := auth.RequireBearerToken(verifier.VerifyJWT, &auth.RequireBearerTokenOptions{
+			authMiddleware := auth.RequireBearerToken(AuthKeeper.VerifyJWT, &auth.RequireBearerTokenOptions{
 				ResourceMetadataURL: "http://" + httpAddr + remoteauth.DefaultProtectedResourceMetadataURI,
 				Scopes:              systemdScopes(),
 			})
