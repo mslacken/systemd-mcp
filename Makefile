@@ -5,6 +5,7 @@ godeps=$(shell 2>/dev/null go list -mod vendor -deps -f '{{if not .Standard}}{{ 
 # Install parameters
 PREFIX ?= /usr
 DESTDIR ?=
+POLICYDIR ?= $(DESTDIR)$(PREFIX)/share
 
 .PHONY: all build vendor test format lint clean dist install
 
@@ -37,8 +38,10 @@ clean:
 dist: build vendor
 	tar -czvf $(GO_BIN).tar.gz $(GO_BIN) vendor
 
-install: build
+install: build policyinstall
 	install -D -m 0755 $(GO_BIN) $(DESTDIR)$(PREFIX)/bin/$(GO_BIN)
-	install -D -m 0644 configs/org.opensuse.systemdmcp.policy $(DESTDIR)$(PREFIX)/share/polkit-1/actions/org.opensuse.systemdmcp.policy
-	install -D -m 0644 configs/org.opensuse.systemdmcp.conf $(DESTDIR)$(PREFIX)/share/dbus-1/system.d/org.opensuse.systemdmcp.conf
+
+policyinstall:
+	install -D -m 0644 configs/org.opensuse.systemdmcp.policy $(POLICYDIR)/polkit-1/actions/org.opensuse.systemdmcp.policy
+	install -D -m 0644 configs/org.opensuse.systemdmcp.conf   $(POLICYDIR)/dbus-1/system.d/org.opensuse.systemdmcp.conf
 

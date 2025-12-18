@@ -8,16 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
-	"os/signal"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/MicahParks/keyfunc/v3"
 	"github.com/cheynewallace/tabby"
-	godbus "github.com/godbus/dbus/v5"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -38,10 +33,11 @@ const (
 )
 
 func systemdScopes() []string {
-	return []string{"mcp:read"}
+	return []string{"mcp:read", "mcp:read"}
 }
 
 func main() {
+	var err error
 	// DO NOT SET DEFAULTS HERE
 	pflag.String("http", "", "if set, use streamable HTTP at this address, instead of stdin/stdout")
 	pflag.String("logfile", "", "if set, log to this file instead of stderr")
@@ -52,12 +48,9 @@ func main() {
 	pflag.Bool("list-tools", false, "List all available tools and exit")
 	pflag.BoolP("allow-write", "w", false, "Authorize write to systemd or allow pending write if started without write")
 	pflag.BoolP("allow-read", "r", false, "Authorize read to systemd or allow pending read if started without read")
-	pflag.BoolP("auth-register", "a", false, "Register for auth call backs")
 	pflag.StringSlice("enabled-tools", nil, "A list of tools to enable. Defaults to all tools.")
 	pflag.Uint32("timeout", 5, "Set the timeout for authentication in seconds")
-	pflag.Bool("noauth", false, "Disable authorization via dbus and always allow read and write access")
-	pflag.Bool("internal-agent", false, "Starts pkttyagent for authorization")
-
+	pflag.Bool("noauth", false, "Disable authorization via dbus/ouath2 always allow read and write access")
 	pflag.Parse()
 	viper.SetEnvPrefix("SYSTEMD_MCP")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
@@ -90,88 +83,39 @@ func main() {
 		logger = slog.New(slog.NewTextHandler(logOutput, handlerOpts))
 	}
 	slog.SetDefault(logger)
-
 	slog.Debug("Logger initialized", "level", logLevel)
 
-	if (viper.GetBool("allow-read") || viper.GetBool("allow-write") || viper.GetBool("auth-register") || viper.GetBool("internal-agent")) && !viper.GetBool("noauth") && viper.GetString("http") == "" {
-		taken, err := authkeeper.IsDBusNameTaken(DBusName)
+	authorization := &authkeeper.AuthKeeper{}
+	if viper.GetBool("noauth") && viper.GetString("controller") == "" {
+		authorization, _ = authkeeper.NewNoAuth()
+	} else if viper.GetString("http") != "" && !viper.GetBool("noauth") {
+		if viper.GetString("controller") == "" {
+			panic("controller needs to be set when http is set")
+		}
+		authorization, err = authkeeper.NewOauth(viper.GetString("controller"))
 		if err != nil {
-			slog.Error("could not check if dbus name is taken", "error", err)
-			os.Exit(1)
+			panic(err)
 		}
-		if taken {
-			conn, err := godbus.ConnectSystemBus()
-			if err != nil {
-				slog.Error("failed to connect to system bus", "error", err)
-				os.Exit(1)
-			}
-			defer conn.Close()
-
-			obj := conn.Object(DBusName, DBusPath)
-			if viper.GetBool("allow-read") {
-				call := obj.Call(DBusName+".AuthRead", 0)
-				if call.Err != nil {
-					slog.Error("failed to authorize read", "error", call.Err)
-					os.Exit(1)
-				}
-				slog.Debug("Read access authorized")
-			}
-			if viper.GetBool("allow-write") {
-				call := obj.Call(DBusName+".AuthWrite", 0)
-				if call.Err != nil {
-					slog.Error("failed to authorize write", "error", call.Err)
-					os.Exit(1)
-				}
-				slog.Debug("Write access authorized")
-			}
-			if viper.GetBool("auth-register") || viper.GetBool("internal-agent") {
-				call := obj.Call(DBusName+".AuthRegister", 0)
-				if call.Err != nil {
-					slog.Error("failed to register for auth call backs", "error", call.Err)
-					os.Exit(1)
-				}
-				slog.Debug("Registered for auth call backs")
-			}
-			if viper.GetBool("internal-agent") {
-				cmd := exec.Command("pkttyagent", "--process", fmt.Sprintf("%d", os.Getpid()))
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
-				cmd.Stdin = os.Stdin
-				if err := cmd.Run(); err != nil {
-					slog.Error("pkttyagent failed", "error", err)
-					os.Exit(1)
-				}
-			} else {
-				slog.Debug("Press Ctrl+C to exit and cancel authorizations.")
-				sigs := make(chan os.Signal, 1)
-				signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-				<-sigs
-			}
-			os.Exit(0)
-		}
-	}
-	AuthKeeper := &authkeeper.AuthKeeper{}
-	if !viper.GetBool("noauth") && viper.GetString("controller") == "" {
-		var err error
-		AuthKeeper, err = authkeeper.SetupDBus(DBusName, DBusPath)
+	} else {
+		authorization, err = authkeeper.NewPolkitAuth(DBusName, DBusPath)
 		if err != nil {
 			slog.Error("failed to setup dbus", "error", err)
 			os.Exit(1)
 		}
-		AuthKeeper.Timeout = viper.GetUint32("timeout")
-		AuthKeeper.ReadAllowed = viper.GetBool("allow-read")
-		AuthKeeper.WriteAllowed = viper.GetBool("allow-write")
-		defer AuthKeeper.Close()
-	} else {
-		AuthKeeper.ReadAllowed = true
-		AuthKeeper.WriteAllowed = true
+		authorization.Timeout = viper.GetUint32("timeout")
+		authorization.ReadAllowed = viper.GetBool("allow-read")
+		authorization.WriteAllowed = viper.GetBool("allow-write")
 	}
-
+	defer authorization.Close()
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
-		Version: "0.1.0",
-	}, nil)
-	systemConn, err := systemd.NewSystem(context.Background(), AuthKeeper)
+		Version: "0.1.0"},
+		&mcp.ServerOptions{
+			InitializedHandler: func(ctx context.Context, req *mcp.InitializedRequest) {
+				slog.Debug("Session started", "ID", req.Session.ID())
+			},
+		})
+	systemConn, err := systemd.NewSystem(context.Background(), authorization)
 	if err != nil {
 		slog.Warn("couldn't add systemd tools", slog.Any("error", err))
 	}
@@ -226,7 +170,7 @@ func main() {
 		)
 	}
 	if journal.CanAccessLogs() {
-		log, err := journal.NewLog(AuthKeeper)
+		log, err := journal.NewLog(authorization)
 		if err != nil {
 			slog.Warn("couldn't open log, not adding journal tool", slog.Any("error", err))
 		} else {
@@ -351,36 +295,12 @@ func main() {
 			slog.Debug("MCP handler listening at", slog.String("address", httpAddr))
 			http.ListenAndServe(httpAddr, handler)
 		} else {
-			controller := viper.GetString("controller")
-			if controller == "" {
-				panic("no ouath2 controller set")
-			}
-			jwksURI, err := remoteauth.GetJwksURI(controller)
-			if err != nil {
-				// slog.Error("getting JWKS URI: %v", err)
-				panic(err)
-			}
-
-			// starts a goroutine in background to download JWK Set and keep it refreshed
-			authCtx := context.Background()
-			AuthKeeper.KeyFunc, err = keyfunc.NewDefaultCtx(authCtx, []string{jwksURI})
-			if err != nil {
-				panic(err)
-			}
-
-			/*
-				verifier := remoteauth.Verifier{
-					KeyFunc: keyFunc,
-				}
-			*/
-
-			authMiddleware := auth.RequireBearerToken(AuthKeeper.VerifyJWT, &auth.RequireBearerTokenOptions{
+			authMiddleware := auth.RequireBearerToken(authorization.Oauth2.VerifyJWT, &auth.RequireBearerTokenOptions{
 				ResourceMetadataURL: "http://" + httpAddr + remoteauth.DefaultProtectedResourceMetadataURI,
 				Scopes:              systemdScopes(),
 			})
 
-			authenticatedHandler := authMiddleware(handler)
-			http.HandleFunc(mcpPath, authenticatedHandler.ServeHTTP)
+			http.HandleFunc(mcpPath, authMiddleware(handler).ServeHTTP)
 			// handler for resourceMetaURL
 			// TODO: replace with https://github.com/modelcontextprotocol/go-sdk/pull/643 after it's merged
 			http.HandleFunc(remoteauth.DefaultProtectedResourceMetadataURI+mcpPath, func(w http.ResponseWriter, _ *http.Request) {
@@ -389,10 +309,10 @@ func main() {
 				w.Header().Set("Access-Control-Allow-Headers", "mcp-protocol-version") // for mcp-inspector
 				prm := &oauthex.ProtectedResourceMetadata{
 					Resource:               "http://" + httpAddr + mcpPath,
-					AuthorizationServers:   []string{controller},
+					AuthorizationServers:   []string{viper.GetString("controller")},
 					ScopesSupported:        systemdScopes(),
 					BearerMethodsSupported: []string{"header"},
-					JWKSURI:                jwksURI,
+					JWKSURI:                authorization.Oauth2.JwksUri,
 				}
 				if err := json.NewEncoder(w).Encode(prm); err != nil {
 					log.Panic(err)

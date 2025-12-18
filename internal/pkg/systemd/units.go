@@ -413,13 +413,11 @@ func (conn *Connection) ChangeUnitState(ctx context.Context, req *mcp.CallToolRe
 	}
 
 	allowed, err := conn.auth.IsWriteAuthorized(permission)
+	if !allowed || err != nil {
+		slog.Debug("ChangeUnit wasn't authorized", "reason", err)
+		return nil, nil, fmt.Errorf("calling method wasn't authorized: %s", err)
+	}
 	defer conn.auth.Deauthorize()
-	if err != nil {
-		return nil, nil, err
-	}
-	if !allowed {
-		return nil, nil, fmt.Errorf("calling method was canceled by user")
-	}
 
 	if params.TimeOut > MaxTimeOut {
 		return nil, nil, fmt.Errorf("not waiting longer than MaxTimeOut(%d), longer operation will run in the background and result can be gathered with separate function.", MaxTimeOut)
