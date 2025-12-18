@@ -169,8 +169,12 @@ func main() {
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
-		Version: "0.1.0",
-	}, nil)
+		Version: "0.1.0"},
+		&mcp.ServerOptions{
+			InitializedHandler: func(ctx context.Context, req *mcp.InitializedRequest) {
+				slog.Debug("Session started", "ID", req.Session.ID())
+			},
+		})
 	systemConn, err := systemd.NewSystem(context.Background(), AuthKeeper)
 	if err != nil {
 		slog.Warn("couldn't add systemd tools", slog.Any("error", err))
@@ -363,10 +367,11 @@ func main() {
 
 			// starts a goroutine in background to download JWK Set and keep it refreshed
 			authCtx := context.Background()
-			AuthKeeper.KeyFunc, err = keyfunc.NewDefaultCtx(authCtx, []string{jwksURI})
+			keyf, err := keyfunc.NewDefaultCtx(authCtx, []string{jwksURI})
 			if err != nil {
 				panic(err)
 			}
+			AuthKeeper.Oauth2 = &remoteauth.Oauth2Auth{KeyFunc: keyf}
 
 			/*
 				verifier := remoteauth.Verifier{
