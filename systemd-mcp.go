@@ -244,11 +244,13 @@ func main() {
 			Tool     *mcp.Tool
 			Register func(server *mcp.Server, tool *mcp.Tool)
 		}{
-			Tool: &mcp.Tool{
-				Name:        "get_current_system_time",
-				Description: "Returns the current system time including time zone information in a format compatible with ListLogParams.",
-				InputSchema: nil,
-			},
+			/*
+				Tool: &mcp.Tool{
+					Name:        "get_current_system_time",
+					Description: "Returns the current system time including time zone information in a format compatible with ListLogParams.",
+					InputSchema: nil,
+				},
+			*/
 			Register: func(server *mcp.Server, tool *mcp.Tool) {
 				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *struct{}) (*mcp.CallToolResult, any, error) {
 					slog.Debug("get_current_system_time called")
