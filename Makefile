@@ -7,12 +7,28 @@ PREFIX ?= /usr
 DESTDIR ?=
 POLICYDIR ?= $(DESTDIR)$(PREFIX)/share
 
-.PHONY: all build vendor test format lint clean dist install
+.PHONY: all build vendor test format lint clean dist install version
 
 all: build
 
-build: $(godeps)
+build: version $(godeps)
 	go build -o $(GO_BIN) -mod=vendor .
+
+version:
+	@if git rev-parse --git-dir > /dev/null 2>&1; then \
+		if git show HEAD:VERSION >/dev/null 2>&1; then \
+			BASE_VERSION=$$(git show HEAD:VERSION); \
+		elif git show :VERSION >/dev/null 2>&1; then \
+			BASE_VERSION=$$(git show :VERSION); \
+		else \
+			BASE_VERSION=$$(cat VERSION | sed 's/-[0-9a-f]\{7\}.*//'); \
+		fi; \
+		GIT_HASH=$$(git rev-parse --short HEAD); \
+		if ! git diff --quiet -- . ':!VERSION'; then \
+			GIT_DIRTY="-dirty"; \
+		fi; \
+		echo "$${BASE_VERSION}-$${GIT_HASH}$${GIT_DIRTY}" > VERSION; \
+	fi
 
 vendor:
 	go mod tidy

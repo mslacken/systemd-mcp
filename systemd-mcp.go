@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	_ "embed"
+
 	"github.com/cheynewallace/tabby"
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -32,6 +34,9 @@ const (
 	mcpPath  = "/mcp"
 )
 
+//go:embed VERSION
+var version string
+
 func systemdScopes() []string {
 	return []string{"mcp:read", "mcp:read"}
 }
@@ -51,7 +56,14 @@ func main() {
 	pflag.StringSlice("enabled-tools", nil, "A list of tools to enable. Defaults to all tools.")
 	pflag.Uint32("timeout", 5, "Set the timeout for authentication in seconds")
 	pflag.Bool("noauth", false, "Disable authorization via dbus/ouath2 always allow read and write access")
+	printVersion := pflag.Bool("version", false, "Print the version and exit")
 	pflag.Parse()
+
+	if *printVersion {
+		fmt.Println(strings.TrimSpace(version))
+		os.Exit(0)
+	}
+
 	viper.SetEnvPrefix("SYSTEMD_MCP")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
@@ -109,7 +121,7 @@ func main() {
 	defer authorization.Close()
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
-		Version: "0.1.0"},
+		Version: strings.TrimSpace(version)},
 		&mcp.ServerOptions{
 			InitializedHandler: func(ctx context.Context, req *mcp.InitializedRequest) {
 				slog.Debug("Session started", "ID", req.Session.ID())
