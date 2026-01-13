@@ -13,8 +13,6 @@ or
   make build
 ```
 
-# Installation
-
 A manual installation can be done with
 ```
   cp systemd-mcp /usr/local/bin/systemd-mcp
@@ -28,52 +26,52 @@ or
 
 # Security
 
-Interacting with `systemd` requires root privileges. `systemd-mcp` is designed with a security model based on `polkit` to control access to potentially dangerous operations.
+Interacting with `systemd` requires privileges. `systemd-mcp` supports two authorization modes depending on the transport used.
 
-## Authorization Flow
+## Stdio Transport (Polkit/DBus)
 
-1.  **Privilege Escalation**: When you start `systemd-mcp`, it will check if it is running as root. If not, it will use `pkexec` to request administrator privileges. You will be prompted for your password to allow the application to run as root.
+When running over Stdio (default), `systemd-mcp` uses `polkit` and `dbus` for authorization.
 
-2.  **Restricted by Default**: Once running as root, the daemon starts in a restricted mode. By default, it is not allowed to perform read or write operations on `systemd`.
+**Configuration:**
+For this to work, the D-Bus and Polkit configuration files must be installed to the system paths:
+*   Copy `./configs/org.opensuse.systemdmcp.conf` to `/etc/dbus-1/system.d/`
+*   Copy `./configs/org.opensuse.systemdmcp.policy` to `/etc/polkit-1/actions/`
 
-3.  **Granting Permissions**: To grant permissions, you need to run a second `systemd-mcp` command in another terminal.
-    *   To receive authorization prompts for operations, run:
-        ```
-        systemd-mcp --auth-register
-        ```
-        This will register a process to handle authorization requests from the main daemon. When a tool needs permissions, a `polkit` dialog will appear asking for your confirmation. You should keep this terminal window open.
-    *  On `ssh` sessions, you can use the `--internal-agent` flag which is a convenience wrapper around `--auth-register` and `pkttyagent`.
+**Privilege Elevation:**
+The daemon connects to the system bus. Operations requiring higher privileges (like writing to systemd units) trigger a PolicyKit (polkit) authentication request via D-Bus. If the user is not authorized, the operation will fail or prompt for authentication depending on the environment and policy settings.
 
-4.  **Pre-authorizing Permissions**: You can also pre-authorize permissions when starting the daemon, or for a daemon that is already running:
-    *   To start the daemon with read access pre-authorized: `systemd-mcp --allow-read`
-    *   To start the daemon with write access pre-authorized: `systemd-mcp --allow-write`
-    *   To grant read access to an already running daemon: `systemd-mcp --allow-read`
-    *   To grant write access to an already running daemon: `systemd-mcp --allow-write`
+## HTTP Transport (OAuth2)
 
-5.  **Disabling Authorization**: For development or in trusted environments, you can disable the `polkit` authorization entirely:
-    ```
-    systemd-mcp --noauth
-    ```
-    > [!CAUTION]
-    > Using `--noauth` gives any client with access to `systemd-mcp` full control over `systemd` as root. Use this with extreme caution.
+When running over HTTP (using `--http`), `systemd-mcp` uses OAuth2 for authorization.
+You must specify an OAuth2 controller address using `--controller` (or `-c`).
+
+**Privilege Elevation:**
+Unlike Stdio mode which can use polkit for on-demand elevation, the HTTP server must be started with elevated privileges (e.g., as `root`) to ensure it has direct access to systemd and journal logs.
+
+**OAuth2 Configuration:**
+The following values must be configured on your OAuth2 Authorization Server (controller) to match the expected credentials:
+*   **Audience**: `systemd-mcp-server`
+*   **Supported Scopes**:
+    *   `mcp:read`: Allows read-only access (e.g., listing units, reading logs).
+    *   `mcp:write`: Allows write access (e.g., starting/stopping units).
 
 # Command-line Options
 
 | Flag                | Shorthand | Description                                                                                             | Default |
 |---------------------|-----------|---------------------------------------------------------------------------------------------------------|---------|
 | `--http`            |           | If set, use streamable HTTP at this address, instead of stdin/stdout.                                   | `""`      |
+| `--controller`      | `-c`      | OAuth2 controller address (required for HTTP mode).                                                     | `""`      |
 | `--logfile`         |           | If set, log to this file instead of stderr.                                                             | `""`      |
 | `--verbose`         | `-v`      | Enable verbose logging.                                                                                 | `false` |
 | `--debug`           | `-d`      | Enable debug logging.                                                                                   | `false` |
 | `--log-json`        |           | Output logs in JSON format (machine-readable).                                                          | `false` |
 | `--list-tools`      |           | List all available tools and exit.                                                                      | `false` |
-| `--allow-write`     | `-w`      | Authorize write access to systemd. Can be used when starting the daemon or to authorize a running daemon. | `false` |
-| `--allow-read`      | `-r`      | Authorize read access to systemd. Can be used when starting the daemon or to authorize a running daemon.  | `false` |
-| `--auth-register`   | `-a`      | Register to handle authorization requests from a running daemon via polkit.                               | `false` |
-| `--internal-agent`  |           | Starts `pkttyagent` to handle authorization requests. A convenience wrapper around `--auth-register`.     | `false` |
-| `--enabled-tools`   |           | A comma-separated list of tools to enable.                                                              | all     |
+| `--allow-write`     | `-w`      | Authorize write to systemd or allow pending write if started without write.                             | `false` |
+| `--allow-read`      | `-r`      | Authorize read to systemd or allow pending read if started without read.                                | `false` |
+| `--enabled-tools`   |           | A list of tools to enable. Defaults to all tools.                                                       | all     |
 | `--timeout`         |           | Set the timeout for authentication in seconds.                                                          | `5`     |
-| `--noauth`          |           | Disable `polkit` authorization and always allow read and write access.                                  | `false` |
+| `--noauth`          |           | Disable authorization via dbus/oauth2 always allow read and write access.                               | `false` |
+| `--version`         |           | Print the version and exit.                                                                             | `false` |
 
 # Functionality
 

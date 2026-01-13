@@ -18,7 +18,7 @@ import (
 
 	"github.com/coreos/go-systemd/v22/sdjournal"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	auth "github.com/openSUSE/systemd-mcp/dbus"
+	auth "github.com/openSUSE/systemd-mcp/authkeeper"
 )
 
 type HostLog struct {
@@ -144,6 +144,7 @@ func (sj *HostLog) seekByTimeRange(params *ListLogParams) error {
 	return nil
 }
 
+/*
 func (sj *HostLog) ListLogTimeout(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
 	slog.Debug("ListLogTimeout called", "params", params)
 	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
@@ -173,7 +174,7 @@ func (sj *HostLog) ListLogTimeout(ctx context.Context, req *mcp.CallToolRequest,
 		return result.res, result.out, result.err
 	}
 }
-
+*/
 // get the lat log entries for a given unit, else just the last messages
 func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
 	allowed, err := sj.auth.IsReadAuthorized()

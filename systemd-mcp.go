@@ -4,24 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
-	"os/signal"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
+	_ "embed"
+
 	"github.com/cheynewallace/tabby"
-	godbus "github.com/godbus/dbus/v5"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/openSUSE/systemd-mcp/dbus"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
+	"github.com/openSUSE/systemd-mcp/authkeeper"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/file"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/man"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/systemd"
+	"github.com/openSUSE/systemd-mcp/remoteauth"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
@@ -29,25 +31,39 @@ import (
 const (
 	DBusName = "org.opensuse.systemdmcp"
 	DBusPath = "/org/opensuse/systemdmcp"
+	mcpPath  = "/mcp"
 )
 
+//go:embed VERSION
+var version string
+
+func systemdScopes() []string {
+	return []string{"mcp:read", "mcp:read"}
+}
+
 func main() {
+	var err error
 	// DO NOT SET DEFAULTS HERE
 	pflag.String("http", "", "if set, use streamable HTTP at this address, instead of stdin/stdout")
 	pflag.String("logfile", "", "if set, log to this file instead of stderr")
+	pflag.String("controller", "c", "ouath2 controller address")
 	pflag.BoolP("verbose", "v", false, "Enable verbose logging")
 	pflag.BoolP("debug", "d", false, "Enable debug logging")
 	pflag.Bool("log-json", false, "Output logs in JSON format (machine-readable)")
 	pflag.Bool("list-tools", false, "List all available tools and exit")
 	pflag.BoolP("allow-write", "w", false, "Authorize write to systemd or allow pending write if started without write")
 	pflag.BoolP("allow-read", "r", false, "Authorize read to systemd or allow pending read if started without read")
-	pflag.BoolP("auth-register", "a", false, "Register for auth call backs")
 	pflag.StringSlice("enabled-tools", nil, "A list of tools to enable. Defaults to all tools.")
 	pflag.Uint32("timeout", 5, "Set the timeout for authentication in seconds")
-	pflag.Bool("noauth", false, "Disable authorization via dbus and always allow read and write access")
-	pflag.Bool("internal-agent", false, "Starts pkttyagent for authorization")
-
+	pflag.Bool("noauth", false, "Disable authorization via dbus/ouath2 always allow read and write access")
+	printVersion := pflag.Bool("version", false, "Print the version and exit")
 	pflag.Parse()
+
+	if *printVersion {
+		fmt.Println(strings.TrimSpace(version))
+		os.Exit(0)
+	}
+
 	viper.SetEnvPrefix("SYSTEMD_MCP")
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	viper.AutomaticEnv()
@@ -79,88 +95,39 @@ func main() {
 		logger = slog.New(slog.NewTextHandler(logOutput, handlerOpts))
 	}
 	slog.SetDefault(logger)
-
 	slog.Debug("Logger initialized", "level", logLevel)
 
-	if (viper.GetBool("allow-read") || viper.GetBool("allow-write") || viper.GetBool("auth-register") || viper.GetBool("internal-agent")) && !viper.GetBool("noauth") && viper.GetString("http") == "" {
-		taken, err := dbus.IsDBusNameTaken(DBusName)
+	authorization := &authkeeper.AuthKeeper{}
+	if viper.GetBool("noauth") && viper.GetString("controller") == "" {
+		authorization, _ = authkeeper.NewNoAuth()
+	} else if viper.GetString("http") != "" && !viper.GetBool("noauth") {
+		if viper.GetString("controller") == "" {
+			panic("controller needs to be set when http is set")
+		}
+		authorization, err = authkeeper.NewOauth(viper.GetString("controller"))
 		if err != nil {
-			slog.Error("could not check if dbus name is taken", "error", err)
-			os.Exit(1)
+			panic(err)
 		}
-		if taken {
-			conn, err := godbus.ConnectSystemBus()
-			if err != nil {
-				slog.Error("failed to connect to system bus", "error", err)
-				os.Exit(1)
-			}
-			defer conn.Close()
-
-			obj := conn.Object(DBusName, DBusPath)
-			if viper.GetBool("allow-read") {
-				call := obj.Call(DBusName+".AuthRead", 0)
-				if call.Err != nil {
-					slog.Error("failed to authorize read", "error", call.Err)
-					os.Exit(1)
-				}
-				slog.Debug("Read access authorized")
-			}
-			if viper.GetBool("allow-write") {
-				call := obj.Call(DBusName+".AuthWrite", 0)
-				if call.Err != nil {
-					slog.Error("failed to authorize write", "error", call.Err)
-					os.Exit(1)
-				}
-				slog.Debug("Write access authorized")
-			}
-			if viper.GetBool("auth-register") || viper.GetBool("internal-agent") {
-				call := obj.Call(DBusName+".AuthRegister", 0)
-				if call.Err != nil {
-					slog.Error("failed to register for auth call backs", "error", call.Err)
-					os.Exit(1)
-				}
-				slog.Debug("Registered for auth call backs")
-			}
-			if viper.GetBool("internal-agent") {
-				cmd := exec.Command("pkttyagent", "--process", fmt.Sprintf("%d", os.Getpid()))
-				cmd.Stdout = os.Stdout
-				cmd.Stderr = os.Stderr
-				cmd.Stdin = os.Stdin
-				if err := cmd.Run(); err != nil {
-					slog.Error("pkttyagent failed", "error", err)
-					os.Exit(1)
-				}
-			} else {
-				slog.Debug("Press Ctrl+C to exit and cancel authorizations.")
-				sigs := make(chan os.Signal, 1)
-				signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-				<-sigs
-			}
-			os.Exit(0)
-		}
-	}
-	AuthKeeper := &dbus.AuthKeeper{}
-	if !viper.GetBool("noauth") {
-		var err error
-		AuthKeeper, err = dbus.SetupDBus(DBusName, DBusPath)
+	} else {
+		authorization, err = authkeeper.NewPolkitAuth(DBusName, DBusPath)
 		if err != nil {
 			slog.Error("failed to setup dbus", "error", err)
 			os.Exit(1)
 		}
-		AuthKeeper.Timeout = viper.GetUint32("timeout")
-		AuthKeeper.ReadAllowed = viper.GetBool("allow-read")
-		AuthKeeper.WriteAllowed = viper.GetBool("allow-write")
-		defer AuthKeeper.Close()
-	} else {
-		AuthKeeper.ReadAllowed = true
-		AuthKeeper.WriteAllowed = true
+		authorization.Timeout = viper.GetUint32("timeout")
+		authorization.ReadAllowed = viper.GetBool("allow-read")
+		authorization.WriteAllowed = viper.GetBool("allow-write")
 	}
-
+	defer authorization.Close()
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
-		Version: "0.1.0",
-	}, nil)
-	systemConn, err := systemd.NewSystem(context.Background(), AuthKeeper)
+		Version: strings.TrimSpace(version)},
+		&mcp.ServerOptions{
+			InitializedHandler: func(ctx context.Context, req *mcp.InitializedRequest) {
+				slog.Debug("Session started", "ID", req.Session.ID())
+			},
+		})
+	systemConn, err := systemd.NewSystem(context.Background(), authorization)
 	if err != nil {
 		slog.Warn("couldn't add systemd tools", slog.Any("error", err))
 	}
@@ -215,7 +182,7 @@ func main() {
 		)
 	}
 	if journal.CanAccessLogs() {
-		log, err := journal.NewLog(AuthKeeper)
+		log, err := journal.NewLog(authorization)
 		if err != nil {
 			slog.Warn("couldn't open log, not adding journal tool", slog.Any("error", err))
 		} else {
@@ -273,33 +240,35 @@ func main() {
 			})
 		},
 	},
-	struct {
-		Tool     *mcp.Tool
-		Register func(server *mcp.Server, tool *mcp.Tool)
-	}{
-		Tool: &mcp.Tool{
-			Name:        "get_current_system_time",
-			Description: "Returns the current system time including time zone information in a format compatible with ListLogParams.",
-			InputSchema: nil,
-		},
-		Register: func(server *mcp.Server, tool *mcp.Tool) {
-			mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *struct{}) (*mcp.CallToolResult, any, error) {
-				slog.Debug("get_current_system_time called")
-				currentTime := time.Now()
-				jsonBytes, err := json.Marshal(currentTime.Format(time.RFC3339))
-				if err != nil {
-					return nil, nil, fmt.Errorf("failed to marshal current time: %w", err)
-				}
-				return &mcp.CallToolResult{
-					Content: []mcp.Content{
-						&mcp.TextContent{
-							Text: string(jsonBytes),
+		struct {
+			Tool     *mcp.Tool
+			Register func(server *mcp.Server, tool *mcp.Tool)
+		}{
+			/*
+				Tool: &mcp.Tool{
+					Name:        "get_current_system_time",
+					Description: "Returns the current system time including time zone information in a format compatible with ListLogParams.",
+					InputSchema: nil,
+				},
+			*/
+			Register: func(server *mcp.Server, tool *mcp.Tool) {
+				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *struct{}) (*mcp.CallToolResult, any, error) {
+					slog.Debug("get_current_system_time called")
+					currentTime := time.Now()
+					jsonBytes, err := json.Marshal(currentTime.Format(time.RFC3339))
+					if err != nil {
+						return nil, nil, fmt.Errorf("failed to marshal current time: %w", err)
+					}
+					return &mcp.CallToolResult{
+						Content: []mcp.Content{
+							&mcp.TextContent{
+								Text: string(jsonBytes),
+							},
 						},
-					},
-				}, currentTime, nil
-			})
-		},
-	})
+					}, currentTime, nil
+				})
+			},
+		})
 
 	var allTools []string
 	for _, tool := range tools {
@@ -332,12 +301,48 @@ func main() {
 		}
 	}
 
-	if viper.GetString("http") != "" {
+	if httpAddr := viper.GetString("http"); httpAddr != "" {
 		handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 			return server
 		}, nil)
-		slog.Debug("MCP handler listening at", slog.String("address", viper.GetString("http")))
-		http.ListenAndServe(viper.GetString("http"), handler)
+		if viper.GetBool("noauth") {
+			slog.Debug("MCP handler listening at", slog.String("address", httpAddr))
+			http.ListenAndServe(httpAddr, handler)
+		} else {
+			authMiddleware := auth.RequireBearerToken(authorization.Oauth2.VerifyJWT, &auth.RequireBearerTokenOptions{
+				ResourceMetadataURL: "http://" + httpAddr + remoteauth.DefaultProtectedResourceMetadataURI,
+				Scopes:              systemdScopes(),
+			})
+
+			http.HandleFunc(mcpPath, authMiddleware(handler).ServeHTTP)
+			// handler for resourceMetaURL
+			// TODO: replace with https://github.com/modelcontextprotocol/go-sdk/pull/643 after it's merged
+			http.HandleFunc(remoteauth.DefaultProtectedResourceMetadataURI+mcpPath, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Access-Control-Allow-Origin", "*")                     // for mcp-inspector
+				w.Header().Set("Access-Control-Allow-Headers", "mcp-protocol-version") // for mcp-inspector
+				prm := &oauthex.ProtectedResourceMetadata{
+					Resource:               "http://" + httpAddr + mcpPath,
+					AuthorizationServers:   []string{viper.GetString("controller")},
+					ScopesSupported:        systemdScopes(),
+					BearerMethodsSupported: []string{"header"},
+					JWKSURI:                authorization.Oauth2.JwksUri,
+				}
+				if err := json.NewEncoder(w).Encode(prm); err != nil {
+					log.Panic(err)
+				}
+			})
+
+			log.Print("MCP server listening on ", httpAddr+mcpPath)
+			s := &http.Server{
+				Addr:              httpAddr,
+				ReadHeaderTimeout: 3 * time.Second,
+			}
+			if err := s.ListenAndServe(); err != nil {
+				panic(err)
+			}
+
+		}
 	} else {
 		slog.Debug("New client has connected via stdin/stdout")
 		if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
