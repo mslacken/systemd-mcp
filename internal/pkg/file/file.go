@@ -137,13 +137,13 @@ func GetFile(ctx context.Context, req *mcp.CallToolRequest, params *GetFileParam
 		// Since we need to paginate, we might need to scan through lines.
 		// For huge files, this is inefficient, but simple for now.
 		// An optimization would be to seek if lines are fixed width, but they aren't.
-		
+
 		var lines []string
 		scanner := bufio.NewScanner(f)
 		lineCount := 0
 		linesRead := 0
-		
-		// If offset is huge, this is slow. 
+
+		// If offset is huge, this is slow.
 		// But usually we just read config files.
 		for scanner.Scan() {
 			if lineCount >= params.Offset && linesRead < limit {
@@ -152,13 +152,13 @@ func GetFile(ctx context.Context, req *mcp.CallToolRequest, params *GetFileParam
 			}
 			lineCount++
 		}
-		
+
 		if err := scanner.Err(); err != nil {
-             // Handle token too long or other errors? 
-             // For now just return what we have or error.
-             if err != bufio.ErrTooLong {
-                 return nil, nil, fmt.Errorf("error reading file: %w", err)
-             }
+			// Handle token too long or other errors?
+			// For now just return what we have or error.
+			if err != bufio.ErrTooLong {
+				return nil, nil, fmt.Errorf("error reading file: %w", err)
+			}
 		}
 
 		result.Content = strings.Join(lines, "\n")
