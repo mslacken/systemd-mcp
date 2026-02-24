@@ -2,12 +2,12 @@ package journal_test
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
-	"io"
-	"encoding/json"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openSUSE/systemd-mcp/authkeeper"
@@ -40,8 +40,9 @@ func runIntegrationJournalList(t *testing.T) {
 	}
 
 	res, _, err := hostLog.ListLog(ctx, nil, params)
-	assert.NoError(t, err)
-	assert.NotNil(t, res)
+	if !assert.NoError(t, err) || !assert.NotNil(t, res) {
+		t.Fatalf("ListLog failed or returned nil result")
+	}
 
 	assert.True(t, len(res.Content) > 0)
 	textContent, ok := res.Content[0].(*mcp.TextContent)
@@ -83,7 +84,8 @@ func TestIntegrationJournal(t *testing.T) {
 Description=Dummy Service
 
 [Service]
-ExecStart=/bin/sh -c 'echo "Hello from dummy service"; sleep 3600'
+ExecStart=/bin/sh -c 'echo "Hello from dummy service"'
+Type=oneshot
 
 [Install]
 WantedBy=multi-user.target
@@ -122,7 +124,7 @@ WantedBy=multi-user.target
 
 	// Run the test inside the container
 	code, outReader, err := container.Exec(ctx, []string{"env", "IN_CONTAINER=1", "/tmp/journal.test", "-test.v", "-test.run", "TestIntegrationJournal"})
-	
+
 	var outStr string
 	if outReader != nil {
 		if b, readErr := io.ReadAll(outReader); readErr == nil {
