@@ -33,6 +33,7 @@ type Connection struct {
 // opens a new user connection to the dbus
 func NewUser(ctx context.Context) (conn *Connection, err error) {
 	conn = new(Connection)
+	conn.rchannel = make(chan string, 1)
 	conn.dbus, err = dbus.NewUserConnectionContext(ctx)
 	if err != nil {
 		return nil, err
@@ -42,6 +43,7 @@ func NewUser(ctx context.Context) (conn *Connection, err error) {
 func NewSystem(ctx context.Context, auth *auth.AuthKeeper) (conn *Connection, err error) {
 	conn = new(Connection)
 	conn.auth = auth
+	conn.rchannel = make(chan string, 1)
 	conn.dbus, err = dbus.NewSystemConnectionContext(ctx)
 	if err != nil {
 		return nil, err
