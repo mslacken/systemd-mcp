@@ -93,6 +93,7 @@ func getFileMetadata(ctx context.Context, path string, info os.FileInfo, fetchAC
 	return metadata
 }
 
+// reads a file with the privileges of the systemd service
 func GetFile(ctx context.Context, req *mcp.CallToolRequest, params *GetFileParams) (*mcp.CallToolResult, any, error) {
 	info, err := os.Stat(params.Path)
 	if err != nil {
