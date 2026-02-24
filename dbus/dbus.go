@@ -325,7 +325,7 @@ func (a *DbusAuth) IsReadAuthorized() (bool, error) {
 		}
 		slog.Debug("name owner", "sender", a.sender)
 	} else if !a.IsLocal() {
-		return false, fmt.Errorf("read to systemd must authorized externally")
+		return false, fmt.Errorf("read to systemd must be authorized externally")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
 	defer cancel()
@@ -354,7 +354,7 @@ func (a *DbusAuth) IsWriteAuthorized(systemdPermission string) (bool, error) {
 
 		}
 	} else if !a.IsLocal() {
-		return false, fmt.Errorf("write to systemd must authorized externally")
+		return false, fmt.Errorf("write to systemd must be authorized externally")
 	}
 	slog.Debug("dbus sender", "address", a.sender)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
