@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // SetupPodmanEnv configures the environment to use podman for testcontainers.
@@ -22,6 +23,40 @@ func SetupPodmanEnv(t *testing.T) {
 	if os.Getenv("DOCKER_HOST") == "" {
 		os.Setenv("DOCKER_HOST", fmt.Sprintf("unix:///run/user/%d/podman/podman.sock", os.Getuid()))
 	}
+}
+
+// StartKeycloakContainer starts a Keycloak container for testing OAuth2 authentication.
+// It imports the provided realm configuration file.
+func StartKeycloakContainer(ctx context.Context, t *testing.T, realmConfigPath string) (testcontainers.Container, error) {
+	req := testcontainers.ContainerRequest{
+		Image:        "quay.io/keycloak/keycloak:latest",
+		ExposedPorts: []string{"8080/tcp"},
+		Env: map[string]string{
+			"KC_BOOTSTRAP_ADMIN_USERNAME": "admin",
+			"KC_BOOTSTRAP_ADMIN_PASSWORD": "admin",
+		},
+		Cmd: []string{"start-dev", "--import-realm"},
+		Files: []testcontainers.ContainerFile{
+			{
+				HostFilePath:      realmConfigPath,
+				ContainerFilePath: "/opt/keycloak/data/import/realm.json",
+				FileMode:          0644,
+			},
+		},
+		// Wait for Keycloak's master realm to be available
+		WaitingFor: wait.ForHTTP("/realms/master").WithPort("8080/tcp").WithStartupTimeout(2 * time.Minute),
+	}
+
+	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+		ProviderType:     testcontainers.ProviderPodman,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to start keycloak container: %w", err)
+	}
+
+	return container, nil
 }
 
 // StartSystemdContainer starts an openSUSE bci-init container with systemd as PID 1.
