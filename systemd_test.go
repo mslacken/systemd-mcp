@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/testframework"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
@@ -174,12 +175,20 @@ Description=Systemd MCP Server
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/systemd-mcp --http :8080 --controller %s --log-json
+ExecStart=/usr/local/bin/systemd-mcp --http :8080 --controller %s --log-json --debug --verbose
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 `, controllerURL)
+
+	// Create a dummy service to test restarting
+	dummyServiceContent := `[Unit]
+Description=Dummy Service
+
+[Service]
+ExecStart=/bin/sleep 3600
+`
 
 	files := []testcontainers.ContainerFile{
 		{
@@ -190,6 +199,11 @@ WantedBy=multi-user.target
 		{
 			Reader:            strings.NewReader(serviceFileContent),
 			ContainerFilePath: "/etc/systemd/system/systemd-mcp.service",
+			FileMode:          0644,
+		},
+		{
+			Reader:            strings.NewReader(dummyServiceContent),
+			ContainerFilePath: "/etc/systemd/system/dummy.service",
 			FileMode:          0644,
 		},
 		{
@@ -219,6 +233,7 @@ WantedBy=multi-user.target
 				outStr = string(b)
 			}
 		}
+		t.Log(outStr)
 		t.Fatalf("Failed to start systemd-mcp service: %v\nLogs: %s", err, outStr)
 	}
 
@@ -293,25 +308,139 @@ WantedBy=multi-user.target
 	if err := json.NewDecoder(respToken.Body).Decode(&tokenResponse); err != nil {
 		t.Fatalf("Failed to decode token response: %v", err)
 	}
+	t.Logf("USER TOKEN: %s", tokenResponse.AccessToken)
 
-	// 6. Test HTTP endpoint with token
-	reqHTTPWithToken, err := http.NewRequest("POST", baseURL+"/mcp", strings.NewReader(`{"jsonrpc": "2.0", "id": 1, "method": "ping"}`))
+	// 6. Test HTTP endpoint with token and establish session via SDK Client
+	clientTransport := &mcp.StreamableClientTransport{
+		Endpoint: baseURL + "/mcp",
+		HTTPClient: &http.Client{
+			Transport: &headerTransport{
+				Transport: http.DefaultTransport,
+				Header:    http.Header{"Authorization": []string{"Bearer " + tokenResponse.AccessToken}},
+			},
+			Timeout: 10 * time.Second,
+		},
+	}
+
+	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	session, err := mcpClient.Connect(ctx, clientTransport, nil)
 	if err != nil {
-		t.Fatalf("Failed to create request: %v", err)
+		t.Fatalf("Failed to start MCP client: %v", err)
 	}
-	// For the SDK's streamable handler, we need the right Accept header to initiate SSE or it acts as the message endpoint
-	reqHTTPWithToken.Header.Set("Accept", "application/json, text/event-stream")
-	reqHTTPWithToken.Header.Set("Authorization", "Bearer "+tokenResponse.AccessToken)
-	respWithToken, err := client.Do(reqHTTPWithToken)
+	defer session.Close()
+
+	// 7. Get token from Keycloak WITH WRITE permissions
+	formWrite := url.Values{}
+	formWrite.Add("client_id", "systemd-mcp")
+	formWrite.Add("username", "mcp-admin") // admin has write access
+	formWrite.Add("password", "admin123")
+	formWrite.Add("grant_type", "password")
+	formWrite.Add("scope", "openid systemd-audience mcp:read mcp:write")
+
+	reqTokenWrite, err := http.NewRequest("POST", tokenURL, strings.NewReader(formWrite.Encode()))
 	if err != nil {
-		t.Fatalf("Failed to connect to endpoint with token: %v", err)
+		t.Fatalf("Failed to create write token request: %v", err)
 	}
-	defer respWithToken.Body.Close()
+	reqTokenWrite.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	respTokenWrite, err := client.Do(reqTokenWrite)
+	if err != nil {
+		t.Fatalf("Failed to get write token: %v", err)
+	}
+	defer respTokenWrite.Body.Close()
 
-	if respWithToken.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(respWithToken.Body)
-		t.Logf("Response body: %s", string(b))
+	if respTokenWrite.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(respTokenWrite.Body)
+		t.Fatalf("Failed to get write token, status: %d, body: %s", respTokenWrite.StatusCode, string(b))
 	}
 
-	assert.Equal(t, http.StatusOK, respWithToken.StatusCode)
+	var writeTokenResponse struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(respTokenWrite.Body).Decode(&writeTokenResponse); err != nil {
+		t.Fatalf("Failed to decode write token response: %v", err)
+	}
+	t.Logf("ADMIN TOKEN: %s", writeTokenResponse.AccessToken)
+
+	// 8. Test tools endpoint: restart dummy service WITHOUT write token (should fail from MCP)
+	resultNoAuth, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name: "change_unit_state",
+		Arguments: map[string]any{
+			"name":   "dummy.service",
+			"action": "restart",
+		},
+	})
+
+	// Dump logs to see internal behavior
+	_, outReader, _ := container.Exec(ctx, []string{"journalctl", "-u", "systemd-mcp", "--no-pager"})
+	var outStr string
+	if outReader != nil {
+		if b, readErr := io.ReadAll(outReader); readErr == nil {
+			outStr = string(b)
+		}
+	}
+	t.Logf("systemd-mcp logs: \n%s", outStr)
+
+	if err != nil {
+		t.Fatalf("Transport error during CallTool: %v", err)
+	}
+
+	if !resultNoAuth.IsError {
+		t.Fatalf("Expected IsError=true for write operation without write scope")
+	}
+
+	var contentStr string
+	for _, c := range resultNoAuth.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			contentStr += tc.Text
+		}
+	}
+	if !strings.Contains(contentStr, "wasn't authorized") {
+		t.Fatalf("Expected authorization error in content, got: %s", contentStr)
+	}
+
+	// 9. Test tools endpoint: restart dummy service WITH write token (should succeed)
+	// Create a new client with the write token
+	adminClientTransport := &mcp.StreamableClientTransport{
+		Endpoint: baseURL + "/mcp",
+		HTTPClient: &http.Client{
+			Transport: &headerTransport{
+				Transport: http.DefaultTransport,
+				Header:    http.Header{"Authorization": []string{"Bearer " + writeTokenResponse.AccessToken}},
+			},
+			Timeout: 10 * time.Second,
+		},
+	}
+
+	adminMcpClient := mcp.NewClient(&mcp.Implementation{Name: "test-client-admin", Version: "1.0.0"}, nil)
+	adminSession, err := adminMcpClient.Connect(ctx, adminClientTransport, nil)
+	if err != nil {
+		t.Fatalf("Failed to start admin MCP client: %v", err)
+	}
+	defer adminSession.Close()
+
+	resultAuth, err := adminSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "change_unit_state",
+		Arguments: map[string]any{
+			"name":   "dummy.service",
+			"action": "restart",
+		}})
+	if err != nil {
+		t.Fatalf("Transport error during admin CallTool: %v", err)
+	}
+	if resultAuth.IsError {
+		t.Fatalf("Expected success for write operation with write scope, got IsError=true, Content: %v", resultAuth.Content)
+	}
+}
+
+// headerTransport is a custom http.RoundTripper that injects headers
+type headerTransport struct {
+	Transport http.RoundTripper
+	Header    http.Header
+}
+
+func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, v := range t.Header {
+		req.Header[k] = v
+	}
+	return t.Transport.RoundTrip(req)
 }

@@ -14,11 +14,11 @@ func TestNewNoAuth(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, auth)
 
-	readAllowed, err := auth.IsReadAuthorized()
+	readAllowed, err := auth.IsReadAuthorized(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, readAllowed)
 
-	writeAllowed, err := auth.IsWriteAuthorized("")
+	writeAllowed, err := auth.IsWriteAuthorized(context.Background(), "")
 	assert.NoError(t, err)
 	assert.True(t, writeAllowed)
 }

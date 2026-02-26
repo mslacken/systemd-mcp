@@ -177,7 +177,7 @@ func (sj *HostLog) ListLogTimeout(ctx context.Context, req *mcp.CallToolRequest,
 */
 // get the lat log entries for a given unit, else just the last messages
 func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
-	allowed, err := sj.auth.IsReadAuthorized()
+	allowed, err := sj.auth.IsReadAuthorized(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

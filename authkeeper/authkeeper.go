@@ -96,23 +96,23 @@ func (a *AuthKeeper) Close() error {
 
 // Delegate methods to Dbus
 
-func (a *AuthKeeper) IsReadAuthorized() (bool, error) {
+func (a *AuthKeeper) IsReadAuthorized(ctx context.Context) (bool, error) {
 	switch a.Mode() {
 	case oauth2:
-		return a.Oauth2.IsReadAuthorized()
+		return a.Oauth2.IsReadAuthorized(ctx)
 	case polkit:
-		return a.Dbus.IsReadAuthorized()
+		return a.Dbus.IsReadAuthorized(ctx)
 	default:
 		return a.ReadAllowed, nil
 	}
 }
 
-func (a *AuthKeeper) IsWriteAuthorized(systemdPermission string) (bool, error) {
+func (a *AuthKeeper) IsWriteAuthorized(ctx context.Context, systemdPermission string) (bool, error) {
 	switch a.Mode() {
 	case oauth2:
-		return a.Oauth2.IsWriteAuthorized()
+		return a.Oauth2.IsWriteAuthorized(ctx)
 	case polkit:
-		return a.Dbus.IsWriteAuthorized("")
+		return a.Dbus.IsWriteAuthorized(systemdPermission)
 	default:
 		return a.WriteAllowed, nil
 	}

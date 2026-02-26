@@ -313,7 +313,7 @@ func SetupDBus(dbusName, dbusPath string) (*DbusAuth, error) {
 
 // Check if read was authorized. Triggers also a call back via
 // dbus if read was authorized at another time
-func (a *DbusAuth) IsReadAuthorized() (bool, error) {
+func (a *DbusAuth) IsReadAuthorized(ctx context.Context) (bool, error) {
 	slog.Debug("checking read auth", "address", a.sender)
 
 	// would always succeed if root so skip for root

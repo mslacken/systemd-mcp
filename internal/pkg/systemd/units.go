@@ -84,7 +84,7 @@ func CreateListUnitsSchema() *jsonschema.Schema {
 
 func (conn *Connection) ListUnits(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitsParams) (*mcp.CallToolResult, any, error) {
 	slog.Debug("ListUnits called", "params", params)
-	allowed, err := conn.auth.IsReadAuthorized()
+	allowed, err := conn.auth.IsReadAuthorized(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -333,7 +333,7 @@ type CheckReloadRestartParams struct {
 func (conn *Connection) CheckForRestartReloadRunning(ctx context.Context, req *mcp.CallToolRequest, params *RestartReloadParams) (res *mcp.CallToolResult, _ any, err error) {
 	slog.Debug("CheckForRestartReloadRunning called", "params", params)
 
-	allowed, err := conn.auth.IsWriteAuthorized("")
+	allowed, err := conn.auth.IsWriteAuthorized(ctx, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -412,7 +412,7 @@ func (conn *Connection) ChangeUnitState(ctx context.Context, req *mcp.CallToolRe
 		permission = "org.freedesktop.systemd1.manage-units"
 	}
 
-	allowed, err := conn.auth.IsWriteAuthorized(permission)
+	allowed, err := conn.auth.IsWriteAuthorized(ctx, permission)
 	if !allowed || err != nil {
 		slog.Debug("ChangeUnit wasn't authorized", "reason", err)
 		return nil, nil, fmt.Errorf("calling method wasn't authorized: %s", err)

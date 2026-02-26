@@ -41,11 +41,11 @@ func runIntegrationDBusSetup(t *testing.T) {
 
 	// In this test container without logind session, IsLocal() returns false,
 	// so IsReadAuthorized and IsWriteAuthorized should fail predictably.
-	readAuth, errRead := auth.IsReadAuthorized()
+	readAuth, errRead := auth.IsReadAuthorized(context.Background())
 	assert.False(t, readAuth)
 	assert.ErrorContains(t, errRead, "must be authorized externally")
 
-	writeAuth, errWrite := auth.IsWriteAuthorized("")
+	writeAuth, errWrite := auth.IsWriteAuthorized(context.Background(), "")
 	assert.False(t, writeAuth)
 	assert.ErrorContains(t, errWrite, "must be authorized externally")
 }

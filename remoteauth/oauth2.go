@@ -27,7 +27,6 @@ type Oauth2Auth struct {
 	KeyFunc keyfunc.Keyfunc // Check oauth2 token func
 	JwksUri string
 	claims  jwt.MapClaims
-	scopes  []string
 }
 
 func NewOutah2Auth() Oauth2Auth {
@@ -84,29 +83,37 @@ func (a *Oauth2Auth) VerifyJWT(ctx context.Context, tokenString string, _ *http.
 		if !ok {
 			return nil, fmt.Errorf("unable to type assert scopes: %w", auth.ErrInvalidToken)
 		}
-		a.scopes = strings.Split(scopes, " ")
-		slog.Debug("scopes", "slice", a.scopes)
+		slog.Debug("scopes", "slice", strings.Split(scopes, " "))
 		return &auth.TokenInfo{
 			Scopes:     strings.Split(scopes, " "),
 			Expiration: expireTime.Time,
 		}, nil
 	}
-	a.scopes = []string{}
 	return nil, auth.ErrInvalidToken
 }
 
 // check if write is authorized via mcp:write
-func (a *Oauth2Auth) IsWriteAuthorized() (bool, error) {
-	if slices.Contains(a.scopes, "mcp:write") {
+func (a *Oauth2Auth) IsWriteAuthorized(ctx context.Context) (bool, error) {
+	ti := auth.TokenInfoFromContext(ctx)
+	if ti == nil {
+		slog.Debug("IsWriteAuthorized: NO TOKEN INFO")
+		return false, fmt.Errorf("no token info in context")
+	}
+	slog.Debug("IsWriteAuthorized", "scopes", ti.Scopes)
+	if slices.Contains(ti.Scopes, "mcp:write") {
 		return true, nil
 	}
-	return false, fmt.Errorf("mcp:write not in scopes: %v", a.scopes)
+	return false, fmt.Errorf("mcp:write not in scopes: %v", ti.Scopes)
 }
 
 // check if read is authorized via mcp:read
-func (a *Oauth2Auth) IsReadAuthorized() (bool, error) {
-	if slices.Contains(a.scopes, "mcp:read") {
+func (a *Oauth2Auth) IsReadAuthorized(ctx context.Context) (bool, error) {
+	ti := auth.TokenInfoFromContext(ctx)
+	if ti == nil {
+		return false, fmt.Errorf("no token info in context")
+	}
+	if slices.Contains(ti.Scopes, "mcp:read") {
 		return true, nil
 	}
-	return false, fmt.Errorf("mcp:read not in scopes: %v", a.scopes)
+	return false, fmt.Errorf("mcp:read not in scopes: %v", ti.Scopes)
 }

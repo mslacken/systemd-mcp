@@ -38,7 +38,7 @@ const (
 var version string
 
 func systemdScopes() []string {
-	return []string{"mcp:read", "mcp:read"}
+	return []string{"mcp:read"}
 }
 
 func main() {

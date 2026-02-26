@@ -23,7 +23,7 @@
         }
       ],
       "defaultClientScopes": ["mcp:read", "systemd-audience"],
-      "optionalClientScopes": ["mcp:read", "mcp:write", "mcp:prompts"]
+      "optionalClientScopes": ["mcp:read", "mcp:write"]
     }
   ],
   "clientScopes": [
@@ -78,6 +78,22 @@
         {
           "type": "password",
           "value": "user123",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "mcp-admin",
+      "email": "admin@mcp.example.com",
+      "firstName": "MCP",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
           "temporary": false
         }
       ]
