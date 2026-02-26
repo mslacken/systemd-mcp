@@ -107,12 +107,12 @@ func (a *AuthKeeper) IsReadAuthorized(ctx context.Context) (bool, error) {
 	}
 }
 
-func (a *AuthKeeper) IsWriteAuthorized(ctx context.Context, systemdPermission string) (bool, error) {
+func (a *AuthKeeper) IsWriteAuthorized(ctx context.Context) (bool, error) {
 	switch a.Mode() {
 	case oauth2:
 		return a.Oauth2.IsWriteAuthorized(ctx)
 	case polkit:
-		return a.Dbus.IsWriteAuthorized(systemdPermission)
+		return a.Dbus.IsWriteAuthorized(ctx)
 	default:
 		return a.WriteAllowed, nil
 	}

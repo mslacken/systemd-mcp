@@ -45,7 +45,7 @@ func runIntegrationDBusSetup(t *testing.T) {
 	assert.False(t, readAuth)
 	assert.ErrorContains(t, errRead, "must be authorized externally")
 
-	writeAuth, errWrite := auth.IsWriteAuthorized(context.Background(), "")
+	writeAuth, errWrite := auth.IsWriteAuthorized(context.Background())
 	assert.False(t, writeAuth)
 	assert.ErrorContains(t, errWrite, "must be authorized externally")
 }

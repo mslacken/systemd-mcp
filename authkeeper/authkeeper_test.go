@@ -1,6 +1,7 @@
 package authkeeper_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/openSUSE/systemd-mcp/authkeeper"
@@ -18,7 +19,7 @@ func TestNewNoAuth(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, readAllowed)
 
-	writeAllowed, err := auth.IsWriteAuthorized(context.Background(), "")
+	writeAllowed, err := auth.IsWriteAuthorized(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, writeAllowed)
 }
