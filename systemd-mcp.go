@@ -46,7 +46,7 @@ func main() {
 	// DO NOT SET DEFAULTS HERE
 	pflag.String("http", "", "if set, use streamable HTTP at this address, instead of stdin/stdout")
 	pflag.String("logfile", "", "if set, log to this file instead of stderr")
-	pflag.String("controller", "c", "ouath2 controller address")
+	pflag.String("controller", "", "ouath2 controller address")
 	pflag.BoolP("verbose", "v", false, "Enable verbose logging")
 	pflag.BoolP("debug", "d", false, "Enable debug logging")
 	pflag.Bool("log-json", false, "Output logs in JSON format (machine-readable)")

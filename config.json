@@ -20,9 +20,21 @@
             "id.token.claim": "false",
             "access.token.claim": "true"
           }
+        },
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
         }
       ],
-      "defaultClientScopes": ["mcp:read", "systemd-audience"],
+      "defaultClientScopes": ["mcp:read", "systemd-audience", "roles"],
       "optionalClientScopes": ["mcp:read", "mcp:write"]
     }
   ],
@@ -65,6 +77,18 @@
       "protocol": "openid-connect"
     }
   ],
+  "roles": {
+    "realm": [
+      {
+        "name": "mcp-user",
+        "description": "User Role"
+      },
+      {
+        "name": "mcp-admin",
+        "description": "Admin Role"
+      }
+    ]
+  },
   "users": [
     {
       "username": "mcp-user",
@@ -74,6 +98,7 @@
       "enabled": true,
       "emailVerified": true,
       "requiredActions": [],
+      "realmRoles": ["mcp-user"],
       "credentials": [
         {
           "type": "password",
@@ -90,6 +115,7 @@
       "enabled": true,
       "emailVerified": true,
       "requiredActions": [],
+      "realmRoles": ["mcp-admin"],
       "credentials": [
         {
           "type": "password",

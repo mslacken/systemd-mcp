@@ -19,6 +19,14 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
+// Create a dummy service to test restarting
+const dummyServiceContent = `[Unit]
+Description=Dummy Service
+
+[Service]
+ExecStart=while true; do echo dummy;/bin/sleep 1; done
+`
+
 func TestSystemdMCPWithPodman(t *testing.T) {
 	testframework.SetupPodmanEnv(t)
 
@@ -54,6 +62,11 @@ WantedBy=multi-user.target
 		{
 			Reader:            strings.NewReader(serviceFileContent),
 			ContainerFilePath: "/etc/systemd/system/systemd-mcp.service",
+			FileMode:          0644,
+		},
+		{
+			Reader:            strings.NewReader(dummyServiceContent),
+			ContainerFilePath: "/etc/systemd/system/dummy.service",
 			FileMode:          0644,
 		},
 		{
@@ -137,6 +150,93 @@ WantedBy=multi-user.target
 	// The MCP SSE endpoint should return 200 OK
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	mcpSession, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: baseURL + "/mcp",
+		HTTPClient: &http.Client{
+			Transport: &headerTransport{
+				Transport: http.DefaultTransport,
+			},
+			Timeout: 10 * time.Second,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Failed to start admin MCP client: %v", err)
+	}
+	defer mcpSession.Close()
+
+	resultTool, err := mcpSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "change_unit_state",
+		Arguments: map[string]any{
+			"name":   "dummy.service",
+			"action": "restart",
+		}})
+	if err != nil {
+		t.Fatalf("Transport error during admin CallTool: %v", err)
+	}
+	if resultTool.IsError {
+		var contentStr string
+		for _, c := range resultTool.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				contentStr += tc.Text
+			}
+		}
+		t.Fatalf("Expected success for write operation with write scope, got IsError=true, Content: %s", contentStr)
+	}
+
+	// Wait a moment for systemd to restart the unit and log it
+	time.Sleep(5 * time.Second)
+
+	// Dump dummy.service logs manually for debugging
+	code, outReader, _ = container.Exec(ctx, []string{"journalctl", "-u", "dummy.service", "-o", "json", "--no-pager"})
+	var dummyLogs string
+	if outReader != nil {
+		if b, readErr := io.ReadAll(outReader); readErr == nil {
+			dummyLogs = string(b)
+		}
+	}
+	t.Logf("dummy.service journalctl:\n%s", dummyLogs)
+
+	// Call list_units to get the unit state
+	resultList, err := mcpSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "list_units",
+		Arguments: map[string]any{
+			"patterns": []string{"dummy.service"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Transport error during list_units CallTool: %v", err)
+	}
+	if resultList.IsError {
+		var contentStr string
+		for _, c := range resultList.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				contentStr += tc.Text
+			}
+		}
+		t.Fatalf("Expected success for list_units, got IsError=true, Content: %s", contentStr)
+	}
+
+	// Call list_log to get the log for the dummy service
+	resultLog, err := mcpSession.CallTool(ctx, &mcp.CallToolParams{
+		Name: "list_log",
+		Arguments: map[string]any{
+			"unit":     "dummy.service",
+			"allboots": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Transport error during list_log CallTool: %v", err)
+	}
+	if resultLog.IsError {
+		var contentStr string
+		for _, c := range resultLog.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				contentStr += tc.Text
+			}
+		}
+		t.Fatalf("Expected success for list_log, got IsError=true, Content: %s", contentStr)
+	}
 }
 
 func TestSystemdMCPWithKeycloak(t *testing.T) {
@@ -145,14 +245,14 @@ func TestSystemdMCPWithKeycloak(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second) // Give more time for Keycloak
 	defer cancel()
 
-	// 1. Build the binary for Linux
+	// Build the systemd-mcp for Linux
 	err := testframework.BuildGoBinary(t, ".", "systemd-mcp-keycloak-linux")
 	if err != nil {
 		t.Fatalf("Failed to build systemd-mcp: %v", err)
 	}
 	defer os.Remove("systemd-mcp-keycloak-linux")
 
-	// 2. Start Keycloak container
+	// Start Keycloak container
 	absPath, err := filepath.Abs("config.json")
 	if err != nil {
 		t.Fatalf("Failed to get abs path of config.json: %v", err)
@@ -181,14 +281,6 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 `, controllerURL)
-
-	// Create a dummy service to test restarting
-	dummyServiceContent := `[Unit]
-Description=Dummy Service
-
-[Service]
-ExecStart=/bin/sleep 3600
-`
 
 	files := []testcontainers.ContainerFile{
 		{
@@ -284,7 +376,7 @@ ExecStart=/bin/sleep 3600
 	form.Add("username", "mcp-user")
 	form.Add("password", "user123")
 	form.Add("grant_type", "password")
-	form.Add("scope", "openid systemd-audience mcp:read")
+	form.Add("scope", "openid systemd-audience mcp:read mcp:write")
 
 	reqToken, err := http.NewRequest("POST", tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -428,7 +520,13 @@ ExecStart=/bin/sleep 3600
 		t.Fatalf("Transport error during admin CallTool: %v", err)
 	}
 	if resultAuth.IsError {
-		t.Fatalf("Expected success for write operation with write scope, got IsError=true, Content: %v", resultAuth.Content)
+		var contentStr string
+		for _, c := range resultAuth.Content {
+			if tc, ok := c.(*mcp.TextContent); ok {
+				contentStr += tc.Text
+			}
+		}
+		t.Fatalf("Expected success for write operation with write scope, got IsError=true, Content: %s", contentStr)
 	}
 }
 

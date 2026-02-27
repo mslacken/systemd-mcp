@@ -64,46 +64,67 @@ func GetJwksURI(issuer string) (string, error) {
 
 func (a *Oauth2Auth) VerifyJWT(ctx context.Context, tokenString string, _ *http.Request) (*auth.TokenInfo, error) {
 	slog.Debug("verifier received token", "value", tokenString)
-	token, err := jwt.ParseWithClaims(tokenString, &a.claims, a.KeyFunc.Keyfunc, jwt.WithAudience(Audience),
+	claims := make(jwt.MapClaims)
+	token, err := jwt.ParseWithClaims(tokenString, claims, a.KeyFunc.Keyfunc, jwt.WithAudience(Audience),
 		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Name}))
 	if err != nil {
-		// Uncomment panic to stop mcp inspector spinning sometimes - it's tedious to kill/restart.
-		// Rate limiting middleware is needed to protect against buggy/misbehaving clients.
-		// See go-sdk examples/server/rate-limiting/.
-		// log.Panicf("err: %v", err)
 		slog.Debug("couldn't parse token", "error", err)
 		return nil, fmt.Errorf("%v: %w", auth.ErrInvalidToken, err)
 	}
 	if token.Valid {
-		expireTime, err := a.claims.GetExpirationTime()
+		expireTime, err := claims.GetExpirationTime()
 		if err != nil {
 			return nil, fmt.Errorf("%v: %w", auth.ErrInvalidToken, err)
 		}
-		scopes, ok := a.claims["scope"].(string)
+		scopes, ok := claims["scope"].(string)
 		if !ok {
 			return nil, fmt.Errorf("unable to type assert scopes: %w", auth.ErrInvalidToken)
 		}
-		slog.Debug("scopes", "slice", strings.Split(scopes, " "))
+		
+		var roles []string
+		if realmAccess, ok := claims["realm_access"].(map[string]any); ok {
+			if r, ok := realmAccess["roles"].([]any); ok {
+				for _, role := range r {
+					if roleStr, ok := role.(string); ok {
+						roles = append(roles, roleStr)
+					}
+				}
+			}
+		}
+
+		slog.Debug("scopes", "slice", strings.Split(scopes, " "), "roles", roles)
 		return &auth.TokenInfo{
 			Scopes:     strings.Split(scopes, " "),
 			Expiration: expireTime.Time,
+			Extra: map[string]any{
+				"roles": roles,
+			},
 		}, nil
 	}
 	return nil, auth.ErrInvalidToken
 }
 
-// check if write is authorized via mcp:write
+// check if write is authorized via mcp:write and mcp-admin role
 func (a *Oauth2Auth) IsWriteAuthorized(ctx context.Context) (bool, error) {
 	ti := auth.TokenInfoFromContext(ctx)
 	if ti == nil {
 		slog.Debug("IsWriteAuthorized: NO TOKEN INFO")
 		return false, fmt.Errorf("no token info in context")
 	}
-	slog.Debug("IsWriteAuthorized", "scopes", ti.Scopes)
-	if slices.Contains(ti.Scopes, "mcp:write") {
+	
+	hasWriteScope := slices.Contains(ti.Scopes, "mcp:write")
+	hasAdminRole := false
+	if rolesRaw, ok := ti.Extra["roles"]; ok {
+		if roles, ok := rolesRaw.([]string); ok {
+			hasAdminRole = slices.Contains(roles, "mcp-admin")
+		}
+	}
+
+	slog.Debug("IsWriteAuthorized", "scopes", ti.Scopes, "hasAdminRole", hasAdminRole)
+	if hasWriteScope && hasAdminRole {
 		return true, nil
 	}
-	return false, fmt.Errorf("mcp:write not in scopes: %v", ti.Scopes)
+	return false, fmt.Errorf("write unauthorized (mcp:write=%v, mcp-admin=%v)", hasWriteScope, hasAdminRole)
 }
 
 // check if read is authorized via mcp:read
