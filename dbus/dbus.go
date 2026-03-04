@@ -313,7 +313,7 @@ func SetupDBus(dbusName, dbusPath string) (*DbusAuth, error) {
 
 // Check if read was authorized. Triggers also a call back via
 // dbus if read was authorized at another time
-func (a *DbusAuth) IsReadAuthorized() (bool, error) {
+func (a *DbusAuth) IsReadAuthorized(ctx context.Context) (bool, error) {
 	slog.Debug("checking read auth", "address", a.sender)
 
 	// would always succeed if root so skip for root
@@ -325,9 +325,10 @@ func (a *DbusAuth) IsReadAuthorized() (bool, error) {
 		}
 		slog.Debug("name owner", "sender", a.sender)
 	} else if !a.IsLocal() {
-		return false, fmt.Errorf("read to systemd must authorized externally")
+		return false, fmt.Errorf("read to systemd must be authorized externally")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
+	slog.Debug("dbus sender", "address", a.sender)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(a.Timeout)*time.Second)
 	defer cancel()
 
 	state, err := a.checkDbusAuth(a.Conn, a.sender, a.DbusName+".AuthRead")
@@ -344,7 +345,11 @@ func (a *DbusAuth) IsReadAuthorized() (bool, error) {
 
 // Check if write was authorized. Triggers also a call back via
 // dbus if write was authorized at another time
-func (a *DbusAuth) IsWriteAuthorized(systemdPermission string) (bool, error) {
+type contextKey string
+
+const PermissionKey contextKey = "systemdPermission"
+
+func (a *DbusAuth) IsWriteAuthorized(ctx context.Context) (bool, error) {
 	slog.Debug("checking write auth", "sender", a.sender)
 	// would always succeed if root so skip for root
 	if a.sender == "" && a.IsLocal() && os.Geteuid() != 0 {
@@ -354,14 +359,15 @@ func (a *DbusAuth) IsWriteAuthorized(systemdPermission string) (bool, error) {
 
 		}
 	} else if !a.IsLocal() {
-		return false, fmt.Errorf("write to systemd must authorized externally")
+		return false, fmt.Errorf("write to systemd must be authorized externally")
 	}
 	slog.Debug("dbus sender", "address", a.sender)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(a.Timeout)*time.Second)
 	defer cancel()
 
 	state, dbuserr := a.checkDbusAuth(a.Conn, a.sender, a.DbusName+".AuthWrite")
 	if dbuserr != nil {
+		systemdPermission, _ := ctx.Value(PermissionKey).(string)
 		if systemdPermission == "" {
 			systemdPermission = "org.freedesktop.systemd1.manage-units"
 		}

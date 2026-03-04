@@ -1,0 +1,128 @@
+{
+  "realm": "mcp-realm",
+  "displayName": "MCP Server Realm",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "systemd-mcp",
+      "type": "public",
+      "enabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "publicClient": true,
+      "protocolMappers": [
+        {
+          "name": "audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "systemd-mcp-server",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ],
+      "defaultClientScopes": ["mcp:read", "systemd-audience", "roles"],
+      "optionalClientScopes": ["mcp:read", "mcp:write"]
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "systemd-audience",
+      "description": "Adds systemd-mcp to token audience",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "mappers": [
+        {
+          "name": "systemd-mcp-mapper",
+          "type": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "systemd-mcp",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "systemd-mcp-server-mapper",
+          "type": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "systemd-mcp-server",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "mcp:read",
+      "protocol": "openid-connect"
+    },
+    {
+      "name": "mcp:write",
+      "protocol": "openid-connect"
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "mcp-user",
+        "description": "User Role"
+      },
+      {
+        "name": "mcp-admin",
+        "description": "Admin Role"
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "mcp-user",
+      "email": "user@mcp.example.com",
+      "firstName": "MCP",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "realmRoles": ["mcp-user"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "user123",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "mcp-admin",
+      "email": "admin@mcp.example.com",
+      "firstName": "MCP",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "realmRoles": ["mcp-admin"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

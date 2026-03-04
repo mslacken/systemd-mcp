@@ -48,7 +48,7 @@ lint:
 	golangci-lint run ./...
 
 clean:
-	rm -f $(GO_BIN) ./vendor
+	rm -rf $(GO_BIN) ./vendor
 	go clean -modcache
 
 dist: build vendor

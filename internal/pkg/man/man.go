@@ -105,8 +105,13 @@ func parseAndFilterManPage(cleanOutput string, params *GetManPageParams) ManPage
 
 	totalLines := len(filteredLines)
 
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 2000
+	}
+
 	// Pagination
-	end := params.Offset + params.Limit
+	end := params.Offset + limit
 	if end > totalLines {
 		end = totalLines
 	}
