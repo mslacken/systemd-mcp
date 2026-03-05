@@ -2,3 +2,4 @@
 systemd-mcp
 # ignore the vendored stuff
 vendor/*
+*tar.gz

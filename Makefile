@@ -52,7 +52,7 @@ clean:
 	go clean -modcache
 
 dist: build vendor
-	tar -czvf $(GO_BIN).tar.gz $(GO_BIN) vendor
+	tar -czvf $(GO_BIN).tar.gz --exclude-vcs --transform 's,^\.,$(GO_BIN),' --exclude=$(GO_BIN).tar.gz --exclude=tmp_dbus .
 
 install: build policyinstall
 	install -D -m 0755 $(GO_BIN) $(DESTDIR)$(PREFIX)/bin/$(GO_BIN)
