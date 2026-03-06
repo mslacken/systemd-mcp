@@ -311,14 +311,26 @@ func main() {
 			}
 		} else {
 			authMiddleware := auth.RequireBearerToken(authorization.Oauth2.VerifyJWT, &auth.RequireBearerTokenOptions{
-				ResourceMetadataURL: "http://" + httpAddr + remoteauth.DefaultProtectedResourceMetadataURI,
+				ResourceMetadataURL: "http://" + httpAddr + remoteauth.DefaultProtectedResourceMetadataURI + mcpPath,
 				Scopes:              systemdScopes(),
 			})
 
-			http.HandleFunc(mcpPath, authMiddleware(handler).ServeHTTP)
+			loggingMiddleware := func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					authHeader := r.Header.Get("Authorization")
+					slog.Debug("Received request at MCP endpoint",
+						slog.String("path", r.URL.Path),
+						slog.String("method", r.Method),
+						slog.Bool("has_auth_header", authHeader != ""))
+					next.ServeHTTP(w, r)
+				})
+			}
+
+			http.HandleFunc(mcpPath, loggingMiddleware(authMiddleware(handler)).ServeHTTP)
 			// handler for resourceMetaURL
 			// TODO: replace with https://github.com/modelcontextprotocol/go-sdk/pull/643 after it's merged
-			http.HandleFunc(remoteauth.DefaultProtectedResourceMetadataURI+mcpPath, func(w http.ResponseWriter, _ *http.Request) {
+			http.HandleFunc(remoteauth.DefaultProtectedResourceMetadataURI+mcpPath, func(w http.ResponseWriter, r *http.Request) {
+				slog.Debug("Client requested OAuth metadata", slog.String("remote_addr", r.RemoteAddr))
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Access-Control-Allow-Origin", "*")                     // for mcp-inspector
 				w.Header().Set("Access-Control-Allow-Headers", "mcp-protocol-version") // for mcp-inspector
@@ -329,6 +341,7 @@ func main() {
 					BearerMethodsSupported: []string{"header"},
 					JWKSURI:                authorization.Oauth2.JwksUri,
 				}
+				slog.Debug("Sending OAuth protected resource metadata", slog.Any("metadata", prm))
 				if err := json.NewEncoder(w).Encode(prm); err != nil {
 					slog.Error("couldn't encode heaeder", "error", err)
 				}

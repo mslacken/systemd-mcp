@@ -10,6 +10,7 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "publicClient": true,
+      "redirectUris": ["http://localhost:*", "http://127.0.0.1:*", "*"],
       "protocolMappers": [
         {
           "name": "audience-mapper",

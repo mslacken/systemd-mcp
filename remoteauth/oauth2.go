@@ -62,22 +62,24 @@ func GetJwksURI(issuer string) (string, error) {
 	return openIDConfig.JwksURI, nil
 }
 
-func (a *Oauth2Auth) VerifyJWT(ctx context.Context, tokenString string, _ *http.Request) (*auth.TokenInfo, error) {
-	slog.Debug("verifier received token", "value", tokenString)
+func (a *Oauth2Auth) VerifyJWT(ctx context.Context, tokenString string, r *http.Request) (*auth.TokenInfo, error) {
+	slog.Debug("verifier received token", "value", tokenString, "remote_addr", r.RemoteAddr)
 	claims := make(jwt.MapClaims)
 	token, err := jwt.ParseWithClaims(tokenString, claims, a.KeyFunc.Keyfunc, jwt.WithAudience(Audience),
 		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Name}))
 	if err != nil {
-		slog.Debug("couldn't parse token", "error", err)
+		slog.Debug("couldn't parse or validate token", "error", err, "remote_addr", r.RemoteAddr)
 		return nil, fmt.Errorf("%v: %w", auth.ErrInvalidToken, err)
 	}
 	if token.Valid {
 		expireTime, err := claims.GetExpirationTime()
 		if err != nil {
+			slog.Debug("failed to get expiration time from token", "error", err)
 			return nil, fmt.Errorf("%v: %w", auth.ErrInvalidToken, err)
 		}
 		scopes, ok := claims["scope"].(string)
 		if !ok {
+			slog.Debug("unable to type assert scopes from token")
 			return nil, fmt.Errorf("unable to type assert scopes: %w", auth.ErrInvalidToken)
 		}
 		
@@ -92,7 +94,7 @@ func (a *Oauth2Auth) VerifyJWT(ctx context.Context, tokenString string, _ *http.
 			}
 		}
 
-		slog.Debug("scopes", "slice", strings.Split(scopes, " "), "roles", roles)
+		slog.Debug("token successfully validated", "scopes", strings.Split(scopes, " "), "roles", roles, "remote_addr", r.RemoteAddr)
 		return &auth.TokenInfo{
 			Scopes:     strings.Split(scopes, " "),
 			Expiration: expireTime.Time,
