@@ -56,6 +56,8 @@ func main() {
 	pflag.StringSlice("enabled-tools", nil, "A list of tools to enable. Defaults to all tools.")
 	pflag.Uint32("timeout", 5, "Set the timeout for authentication in seconds")
 	pflag.Bool("noauth", false, "Disable authorization via dbus/ouath2 always allow read and write access")
+	pflag.String("cert-file", "", "Path to server certificate file (PEM format) for TLS. Requires --key-file")
+	pflag.String("key-file", "", "Path to server private key file (PEM format) for TLS. Requires --cert-file")
 	printVersion := pflag.Bool("version", false, "Print the version and exit")
 	pflag.Parse()
 
@@ -121,9 +123,23 @@ func main() {
 		authorization.WriteAllowed = viper.GetBool("allow-write")
 	}
 	defer authorization.Close()
+
+	if viper.GetString("http") != "" {
+		isKeyFileSet := viper.GetString("key-file") != ""
+		isCertFileSet := viper.GetString("cert-file") != ""
+		if isKeyFileSet != isCertFileSet {
+			if !isKeyFileSet {
+				slog.Error("--key-file is required with --cert-file")
+			} else {
+				slog.Error("--cert-file is required with --key-file")
+			}
+			os.Exit(1)
+		}
+	}
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "Systemd connection",
-		Version: strings.TrimSpace(version)},
+		Version: strings.TrimSpace(version),
+	},
 		&mcp.ServerOptions{
 			InitializedHandler: func(ctx context.Context, req *mcp.InitializedRequest) {
 				slog.Debug("Session started", "ID", req.Session.ID())
@@ -280,8 +296,19 @@ func main() {
 			return server
 		}, nil)
 		if viper.GetBool("noauth") {
-			slog.Debug("MCP handler listening at", slog.String("address", httpAddr))
-			http.ListenAndServe(httpAddr, handler)
+			if viper.GetString("cert-file") == "" {
+				slog.Debug("MCP handler listening at", slog.String("address", httpAddr))
+				if err := http.ListenAndServe(httpAddr, handler); err != nil {
+					slog.Error("couldn't start http server", "error", err)
+				}
+			} else {
+				keyFile := viper.GetString("key-file")
+				certFile := viper.GetString("cert-file")
+				slog.Debug("MCP handler listening with TLS at", slog.String("address", httpAddr))
+				if err := http.ListenAndServeTLS(httpAddr, certFile, keyFile, handler); err != nil {
+					slog.Error("couldn't start tls http server", "error", err)
+				}
+			}
 		} else {
 			authMiddleware := auth.RequireBearerToken(authorization.Oauth2.VerifyJWT, &auth.RequireBearerTokenOptions{
 				ResourceMetadataURL: "http://" + httpAddr + remoteauth.DefaultProtectedResourceMetadataURI,
@@ -312,10 +339,17 @@ func main() {
 				Addr:              httpAddr,
 				ReadHeaderTimeout: 3 * time.Second,
 			}
-			if err := s.ListenAndServe(); err != nil {
-				slog.Error("couldn't start http server", "error", "err")
+			if viper.GetString("cert-file") == "" {
+				if err := s.ListenAndServe(); err != nil {
+					slog.Error("couldn't start http server", "error", err)
+				}
+			} else {
+				keyFile := viper.GetString("key-file")
+				certFile := viper.GetString("cert-file")
+				if err := s.ListenAndServeTLS(certFile, keyFile); err != nil {
+					slog.Error("couldn't start tls http server", "error", err)
+				}
 			}
-
 		}
 	} else {
 		slog.Debug("New client has connected via stdin/stdout")
