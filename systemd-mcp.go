@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	DBusName = "org.opensuse.systemdmcp"
-	DBusPath = "/org/opensuse/systemdmcp"
-	mcpPath  = "/mcp"
+	DBusName    = "org.opensuse.systemdmcp"
+	DBusPath    = "/org/opensuse/systemdmcp"
+	mcpPath     = "/mcp"
+	magicNoauth = "ThisIsInsecure"
 )
 
 //go:embed VERSION
@@ -47,7 +48,7 @@ func main() {
 	pflag.String("http", "", "if set, use streamable HTTP at this address, instead of stdin/stdout")
 	pflag.Bool("skip-tls-verify", false, "Skip TLS certificate verification for outbound requests (e.g. to OAuth2 controller)")
 	pflag.String("logfile", "", "if set, log to this file instead of stderr")
-	pflag.String("controller", "", "ouath2 controller address")
+	pflag.String("controller", "", "oauth2 controller address")
 	pflag.BoolP("verbose", "v", false, "Enable verbose logging")
 	pflag.BoolP("debug", "d", false, "Enable debug logging")
 	pflag.Bool("log-json", false, "Output logs in JSON format (machine-readable)")
@@ -56,7 +57,7 @@ func main() {
 	pflag.BoolP("allow-read", "r", false, "Authorize read to systemd or allow pending read if started without read")
 	pflag.StringSlice("enabled-tools", nil, "A list of tools to enable. Defaults to all tools.")
 	pflag.Uint32("timeout", 5, "Set the timeout for authentication in seconds")
-	pflag.Bool("noauth", false, "Disable authorization via dbus/ouath2 always allow read and write access")
+	pflag.String("noauth", "", fmt.Sprintf("Disable authorization via dbus/oauth2, this parameter has to be set to %s to work.", magicNoauth))
 	pflag.String("cert-file", "", "Path to server certificate file (PEM format) for TLS. Requires --key-file")
 	pflag.String("key-file", "", "Path to server private key file (PEM format) for TLS. Requires --cert-file")
 	printVersion := pflag.Bool("version", false, "Print the version and exit")
@@ -101,9 +102,9 @@ func main() {
 	slog.Debug("Logger initialized", "level", logLevel)
 
 	authorization := &authkeeper.AuthKeeper{}
-	if viper.GetBool("noauth") && viper.GetString("controller") == "" {
+	if viper.GetString("noauth") == magicNoauth && viper.GetString("controller") == "" {
 		authorization, _ = authkeeper.NewNoAuth()
-	} else if viper.GetString("http") != "" && !viper.GetBool("noauth") {
+	} else if viper.GetString("http") != "" && viper.GetString("noauth") != magicNoauth {
 		if viper.GetString("controller") == "" {
 			slog.Error("controller needs to be set when http is set")
 			os.Exit(1)
@@ -299,7 +300,7 @@ func main() {
 		handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 			return server
 		}, nil)
-		if viper.GetBool("noauth") {
+		if viper.GetString("noauth") == magicNoauth {
 			if viper.GetString("cert-file") == "" {
 				slog.Debug("MCP handler listening at", slog.String("address", httpAddr))
 				if err := http.ListenAndServe(httpAddr, handler); err != nil {
