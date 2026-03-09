@@ -17,7 +17,7 @@ func TestGetJwksURI(t *testing.T) {
 		}))
 		defer server.Close()
 
-		uri, err := GetJwksURI(server.URL)
+		uri, err := GetJwksURI(server.URL, false)
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -32,7 +32,7 @@ func TestGetJwksURI(t *testing.T) {
 		}))
 		defer server.Close()
 
-		_, err := GetJwksURI(server.URL)
+		_, err := GetJwksURI(server.URL, false)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -48,7 +48,7 @@ func TestGetJwksURI(t *testing.T) {
 		}))
 		defer server.Close()
 
-		_, err := GetJwksURI(server.URL)
+		_, err := GetJwksURI(server.URL, false)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -65,7 +65,7 @@ func TestGetJwksURI(t *testing.T) {
 		}))
 		defer server.Close()
 
-		_, err := GetJwksURI(server.URL)
+		_, err := GetJwksURI(server.URL, false)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}

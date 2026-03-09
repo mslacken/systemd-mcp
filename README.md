@@ -8,12 +8,7 @@ Compile directly with
 ```
   go build systemd-mcp.go
 ```
-or
-```
-  make build
-```
-
-A manual installation can be done with
+and install the policy files for polkit for local authentication with
 ```
   cp systemd-mcp /usr/local/bin/systemd-mcp
   cp ./configs/org.opensuse.systemdmcp.conf /etc/dbus-1/system.d/
@@ -21,16 +16,19 @@ A manual installation can be done with
 ```
 or
 ```
+  make build
+```
+and install with
+
+```
   make install
 ```
 
 # Security
 
-Interacting with `systemd` requires privileges. `systemd-mcp` supports two authorization modes depending on the transport used.
-
 ## Stdio Transport (Polkit/DBus)
 
-When running over Stdio (default), `systemd-mcp` uses `polkit` and `dbus` for authorization.
+When running over Stdio (default), `systemd-mcp` uses `polkit` and `dbus` for authorization. The `systemd-mcp` process itself runs in the context of the user and authorization is done via Polkit.
 
 **Configuration:**
 For this to work, the D-Bus and Polkit configuration files must be installed to the system paths:
@@ -43,9 +41,8 @@ The daemon connects to the system bus. Operations requiring higher privileges (l
 ## HTTP Transport (OAuth2)
 
 When running over HTTP (using `--http`), `systemd-mcp` uses OAuth2 for authorization.
-You must specify an OAuth2 controller address using `--controller` (or `-c`).
+You must specify an OAuth2 controller address using `--controller`.
 
-**Privilege Elevation:**
 Unlike Stdio mode which can use polkit for on-demand elevation, the HTTP server must be started with elevated privileges (e.g., as `root`) to ensure it has direct access to systemd and journal logs.
 
 **OAuth2 Configuration:**
@@ -55,13 +52,18 @@ The following values must be configured on your OAuth2 Authorization Server (con
     *   `mcp:read`: Allows read-only access (e.g., listing units, reading logs).
     *   `mcp:write`: Allows write access (e.g., starting/stopping units).
 
+## HTTP Transport with authentication
+
+For debugging purposes and strictly for that, the `--noauth` flag can be used to access the mcp server without any further authentication step. In order to make sure that everybody knows that this is completely insecure the parameter has to be set to "ThisIsInsecure" in order to work.
+
 # Command-line Options
 
 | Flag                | Shorthand | Description                                                                                             | Default |
 |---------------------|-----------|---------------------------------------------------------------------------------------------------------|---------|
-| `--http`            |           | If set, use streamable HTTP at this address, instead of stdin/stdout.                                   | `""`      |
-| `--controller`      | `-c`      | OAuth2 controller address (required for HTTP mode).                                                     | `""`      |
-| `--logfile`         |           | If set, log to this file instead of stderr.                                                             | `""`      |
+| `--http`            |           | If set, use streamable HTTP at this address, instead of stdin/stdout.                                   | `""`    |
+| `--skip-tls-verify` |           | Skip TLS certificate verification for outbound requests (e.g. to OAuth2 controller).                    | `false` |
+| `--controller`      |           | OAuth2 controller address (required for HTTP mode).                                                     | `""`    |
+| `--logfile`         |           | If set, log to this file instead of stderr.                                                             | `""`    |
 | `--verbose`         | `-v`      | Enable verbose logging.                                                                                 | `false` |
 | `--debug`           | `-d`      | Enable debug logging.                                                                                   | `false` |
 | `--log-json`        |           | Output logs in JSON format (machine-readable).                                                          | `false` |
@@ -71,6 +73,8 @@ The following values must be configured on your OAuth2 Authorization Server (con
 | `--enabled-tools`   |           | A list of tools to enable. Defaults to all tools.                                                       | all     |
 | `--timeout`         |           | Set the timeout for authentication in seconds.                                                          | `5`     |
 | `--noauth`          |           | Disable authorization via dbus/oauth2 always allow read and write access.                               | `false` |
+| `--cert-file`       |           | Path to server certificate file (PEM format) for TLS. Requires --key-file.                              | `""`    |
+| `--key-file`        |           | Path to server private key file (PEM format) for TLS. Requires --cert-file.                             | `""`    |
 | `--version`         |           | Print the version and exit.                                                                             | `false` |
 
 # Functionality
@@ -85,7 +89,5 @@ Following tools are provided:
 
 # Testing
 
-You can test the functions with [mcptools](https://github.com/f/mcptools), with e.g.
-```
-  mcptools shell go run systemd-mcp.go
-```
+For testing purposes the test client `./test/main.go` is provided.
+Also there are several unit tests including `systemd_test.go` which tests authentication with oauth2 using a keycloak container.

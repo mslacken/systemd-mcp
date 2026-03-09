@@ -7,12 +7,15 @@ PREFIX ?= /usr
 DESTDIR ?=
 POLICYDIR ?= $(DESTDIR)$(PREFIX)/share
 
-.PHONY: all build vendor test format lint clean dist install version
+.PHONY: all build test-client vendor test format lint clean dist install version
 
-all: build
+all: build test-client
 
 build: version $(godeps)
 	go build -o $(GO_BIN) -mod=vendor .
+
+test-client: version $(godeps)
+	go build -o test-client -mod=vendor ./test
 
 version:
 	@if git rev-parse --git-dir > /dev/null 2>&1; then \
@@ -52,7 +55,7 @@ clean:
 	go clean -modcache
 
 dist: build vendor
-	tar -czvf $(GO_BIN).tar.gz $(GO_BIN) vendor
+	tar -czvf $(GO_BIN).tar.gz --exclude-vcs --transform 's,^\.,$(GO_BIN),' --exclude=$(GO_BIN).tar.gz --exclude=tmp_dbus .
 
 install: build policyinstall
 	install -D -m 0755 $(GO_BIN) $(DESTDIR)$(PREFIX)/bin/$(GO_BIN)

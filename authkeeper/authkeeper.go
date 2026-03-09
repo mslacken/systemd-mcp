@@ -2,8 +2,11 @@ package authkeeper
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/MicahParks/keyfunc/v3"
 	godbus "github.com/godbus/dbus/v5"
@@ -68,17 +71,28 @@ func NewNoAuth() (*AuthKeeper, error) {
 }
 
 // remote auth with oauth2
-func NewOauth(controller string) (*AuthKeeper, error) {
+func NewOauth(controller string, skipVerify bool) (*AuthKeeper, error) {
 	if !strings.HasPrefix(controller, "http") {
 		controller = "http://" + controller
 	}
 	a := new(AuthKeeper)
-	jwksURI, err := remoteauth.GetJwksURI(controller)
+	jwksURI, err := remoteauth.GetJwksURI(controller, skipVerify)
 	if err != nil {
 		return a, err
 	}
 	a.context = context.Background()
-	keyf, err := keyfunc.NewDefaultCtx(a.context, []string{jwksURI})
+
+	override := keyfunc.Override{}
+	if skipVerify {
+		override.Client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+			Timeout: 10 * time.Second,
+		}
+	}
+
+	keyf, err := keyfunc.NewDefaultOverrideCtx(a.context, []string{jwksURI}, override)
 	if err != nil {
 		return a, err
 	}
