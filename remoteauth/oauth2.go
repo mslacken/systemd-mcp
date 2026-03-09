@@ -2,12 +2,14 @@ package remoteauth
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
@@ -38,8 +40,14 @@ func NewOutah2Auth() Oauth2Auth {
 
 // getJwksUri gets the jwks_uri from the OpenID Provider configuration information.
 // See https://openid.net/specs/openid-connect-discovery-1_0.html
-func GetJwksURI(issuer string) (string, error) {
-	resp, err := http.Get(issuer + "/.well-known/openid-configuration")
+func GetJwksURI(issuer string, skipVerify bool) (string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	if skipVerify {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+	resp, err := client.Get(issuer + "/.well-known/openid-configuration")
 	if err != nil {
 		return "", err
 	}

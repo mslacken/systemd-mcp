@@ -45,6 +45,7 @@ func main() {
 	var err error
 	// DO NOT SET DEFAULTS HERE
 	pflag.String("http", "", "if set, use streamable HTTP at this address, instead of stdin/stdout")
+	pflag.Bool("skip-tls-verify", false, "Skip TLS certificate verification for outbound requests (e.g. to OAuth2 controller)")
 	pflag.String("logfile", "", "if set, log to this file instead of stderr")
 	pflag.String("controller", "", "ouath2 controller address")
 	pflag.BoolP("verbose", "v", false, "Enable verbose logging")
@@ -107,12 +108,12 @@ func main() {
 			slog.Error("controller needs to be set when http is set")
 			os.Exit(1)
 		}
-		authorization, err = authkeeper.NewOauth(viper.GetString("controller"))
+		authorization, err = authkeeper.NewOauth(viper.GetString("controller"), viper.GetBool("skip-tls-verify"))
 		if err != nil {
 			slog.Error("couldn't create connection to controller", "error", err)
 			os.Exit(1)
 		}
-	} else {
+	} else if viper.GetString("controller") == "" {
 		authorization, err = authkeeper.NewPolkitAuth(DBusName, DBusPath)
 		if err != nil {
 			slog.Error("failed to setup dbus", "error", err)
@@ -121,6 +122,9 @@ func main() {
 		authorization.Timeout = viper.GetUint32("timeout")
 		authorization.ReadAllowed = viper.GetBool("allow-read")
 		authorization.WriteAllowed = viper.GetBool("allow-write")
+	} else {
+		slog.Error("controller set but not http")
+		os.Exit(1)
 	}
 	defer authorization.Close()
 
@@ -311,8 +315,7 @@ func main() {
 			}
 		} else {
 			authMiddleware := auth.RequireBearerToken(authorization.Oauth2.VerifyJWT, &auth.RequireBearerTokenOptions{
-				ResourceMetadataURL: "http://" + httpAddr + remoteauth.DefaultProtectedResourceMetadataURI + mcpPath,
-				Scopes:              systemdScopes(),
+				Scopes: systemdScopes(),
 			})
 
 			loggingMiddleware := func(next http.Handler) http.Handler {
@@ -335,7 +338,6 @@ func main() {
 				w.Header().Set("Access-Control-Allow-Origin", "*")                     // for mcp-inspector
 				w.Header().Set("Access-Control-Allow-Headers", "mcp-protocol-version") // for mcp-inspector
 				prm := &oauthex.ProtectedResourceMetadata{
-					Resource:               "http://" + httpAddr + mcpPath,
 					AuthorizationServers:   []string{viper.GetString("controller")},
 					ScopesSupported:        systemdScopes(),
 					BearerMethodsSupported: []string{"header"},

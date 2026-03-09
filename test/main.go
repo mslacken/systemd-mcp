@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,20 +23,35 @@ import (
 )
 
 var (
-	endpoint     string
-	token        string
-	debug        bool
-	interactive  bool
-	callbackHost string
-	kcURL        string
-	kcUser       string
-	kcPass       string
-	kcClient     string
+	endpoint      string
+	token         string
+	debug         bool
+	interactive   bool
+	skipTLSVerify bool
+	callbackHost  string
+	kcURL         string
+	kcUser        string
+	kcPass        string
+	kcClient      string
 )
 
 func debugLog(format string, a ...interface{}) {
 	if debug {
 		fmt.Printf("[DEBUG] "+format+"\n", a...)
+	}
+}
+
+func getHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if skipTLSVerify {
+		if transport.TLSClientConfig == nil {
+			transport.TLSClientConfig = &tls.Config{}
+		}
+		transport.TLSClientConfig.InsecureSkipVerify = true
+	}
+	return &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
 	}
 }
 
@@ -48,7 +64,8 @@ func discoverKeycloakURL() (string, error) {
 	metaURL := fmt.Sprintf("%s://%s/.well-known/oauth-protected-resource%s", u.Scheme, u.Host, u.Path)
 	debugLog("Fetching metadata from %s", metaURL)
 
-	resp, err := http.Get(metaURL)
+	client := getHTTPClient()
+	resp, err := client.Get(metaURL)
 	if err != nil {
 		return "", err
 	}
@@ -155,6 +172,10 @@ func doInteractiveLogin(serverURL string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		defer srv.Shutdown(ctx)
+		
+		client := getHTTPClient()
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, client)
+		
 		tok, err := conf.Exchange(ctx, code)
 		if err != nil {
 			return "", err
@@ -203,7 +224,7 @@ func getTokenFromKeycloak() (string, error) {
 	}
 	reqToken.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := getHTTPClient()
 	respToken, err := client.Do(reqToken)
 	if err != nil {
 		return "", err
@@ -263,16 +284,16 @@ func createClient() (*mcp.Client, *mcp.ClientSession, error) {
 		debugLog("Using provided bearer token")
 	}
 
+	client := getHTTPClient()
+	client.Transport = &headerTransport{
+		Transport: client.Transport,
+		Header:    header,
+	}
+
 	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "cli-test-client", Version: "1.0.0"}, nil)
 	mcpSession, err := mcpClient.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint: endpoint,
-		HTTPClient: &http.Client{
-			Transport: &headerTransport{
-				Transport: http.DefaultTransport,
-				Header:    header,
-			},
-			Timeout: 10 * time.Second,
-		},
+		Endpoint:   endpoint,
+		HTTPClient: client,
 	}, nil)
 
 	if err != nil {
@@ -464,6 +485,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVarP(&token, "token", "t", "", "Bearer token for authentication")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "Enable debug logging")
 	rootCmd.PersistentFlags().BoolVarP(&interactive, "interactive", "i", false, "Use interactive browser login instead of username/password")
+	rootCmd.PersistentFlags().BoolVar(&skipTLSVerify, "skip-tls-verify", false, "Skip TLS certificate verification")
 	rootCmd.PersistentFlags().StringVar(&callbackHost, "callback-host", "127.0.0.1", "Hostname to bind the interactive login callback to")
 
 	rootCmd.PersistentFlags().StringVar(&kcURL, "kc-url", "", "Keycloak Server URL (e.g. http://localhost:8880/realms/mcp-realm)")
