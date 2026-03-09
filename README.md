@@ -56,6 +56,16 @@ The following values must be configured on your OAuth2 Authorization Server (con
 
 For debugging purposes and strictly for that, the `--noauth` flag can be used to access the mcp server without any further authentication step. In order to make sure that everybody knows that this is completely insecure the parameter has to be set to "ThisIsInsecure" in order to work.
 
+### Self-signed certificates
+
+To run the server in HTTP mode with TLS, you need a certificate and a key. You can generate self-signed certificates for local testing with:
+
+```bash
+  make certs
+```
+
+This will create `server.crt` and `server.key` in the current directory, which can then be used with the `--cert-file` and `--key-file` flags.
+
 # Command-line Options
 
 | Flag                | Shorthand | Description                                                                                             | Default |

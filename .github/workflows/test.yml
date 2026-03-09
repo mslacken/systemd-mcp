@@ -1,7 +1,4 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
-name: Go
+name: Test
 
 on:
   push:
@@ -11,7 +8,7 @@ on:
 
 jobs:
 
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -26,9 +23,6 @@ jobs:
 
     - name: Vendor
       run: go mod vendor
-
-    - name: Build
-      run: go build -mod=vendor -v ./...
 
     - name: Test
       run: go test -mod=vendor -v ./...

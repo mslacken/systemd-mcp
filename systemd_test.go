@@ -46,7 +46,7 @@ Description=Systemd MCP Server
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/systemd-mcp --http :8080 --noauth --log-json
+ExecStart=/usr/local/bin/systemd-mcp --http :8080 --noauth ThisIsInsecure --log-json
 Restart=always
 
 [Install]

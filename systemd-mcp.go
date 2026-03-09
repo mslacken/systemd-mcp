@@ -124,7 +124,7 @@ func main() {
 		authorization.ReadAllowed = viper.GetBool("allow-read")
 		authorization.WriteAllowed = viper.GetBool("allow-write")
 	} else {
-		slog.Error("controller set but not http")
+		slog.Error("http needs either controller or noauth")
 		os.Exit(1)
 	}
 	defer authorization.Close()

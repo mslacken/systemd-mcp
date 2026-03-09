@@ -51,8 +51,11 @@ lint:
 	golangci-lint run ./...
 
 clean:
-	rm -rf $(GO_BIN) ./vendor
+	rm -rf $(GO_BIN) ./vendor server.crt server.key
 	go clean -modcache
+
+certs:
+	openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"
 
 dist: build vendor
 	tar -czvf $(GO_BIN).tar.gz --exclude-vcs --transform 's,^\.,$(GO_BIN),' --exclude=$(GO_BIN).tar.gz --exclude=tmp_dbus .
