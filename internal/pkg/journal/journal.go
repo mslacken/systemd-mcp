@@ -45,8 +45,8 @@ type ListLogParams struct {
 	Offset   int       `json:"offset,omitempty" jsonschema:"Number of newest log entries to skip for pagination"`
 	From     time.Time `json:"from,omitempty" jsonschema:"Start time for filtering logs"`
 	To       time.Time `json:"to,omitempty" jsonschema:"End time for filtering logs "`
-	Pattern  string    `json:"pattern,omitempty" jsonschema:"Regular expression pattern to filter log messages."`
-	Unit     string    `json:"unit,omitempty" jsonschema:"Exact name of the service/unit from which to get the logs. Without an unit name the entries of all units are returned. This parameter is optional."`
+	Pattern  string    `json:"pattern,omitempty" jsonschema:"Regular expression pattern to filter log messages or units."`
+	Unit     string    `json:"unit,omitempty" jsonschema:"Exact name of the service/unit from which to get the logs. Without an unit name the entries of all units are returned."`
 	AllBoots bool      `json:"allboots,omitempty" jsonschema:"Get the log entries from all boots, not just the active one"`
 }
 
@@ -235,17 +235,6 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 	uniqExeName := make(map[string]bool)
 	host, _ := os.Hostname()
 
-	var fromTime, toTime time.Time
-	var hasFromFilter, hasToFilter bool
-	if !params.From.IsZero() {
-		fromTime = params.From
-		hasFromFilter = true
-	}
-	if !params.To.IsZero() {
-		toTime = params.To
-		hasToFilter = true
-	}
-
 	var regexPattern *regexp.Regexp
 	if params.Pattern != "" {
 		var err error
@@ -269,7 +258,7 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 
 		timestamp := time.Unix(0, int64(entry.RealtimeTimestamp)*int64(time.Microsecond))
 
-		if hasFromFilter && timestamp.Before(fromTime) {
+		if !params.To.IsZero() && timestamp.Before(params.To) {
 
 			ret, err := sj.journal.Next()
 			if err != nil {
@@ -281,7 +270,7 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 			continue
 		}
 
-		if hasToFilter && timestamp.After(toTime) {
+		if !params.From.IsZero() && timestamp.After(params.From) {
 			ret, err := sj.journal.Next()
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
@@ -293,8 +282,11 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		}
 
 		if regexPattern != nil {
-			message := entry.Fields["MESSAGE"]
-			if !regexPattern.MatchString(message) {
+			var messages strings.Builder
+			for _, v := range entry.Fields {
+				messages.WriteString(v)
+			}
+			if !regexPattern.MatchString(messages.String()) {
 				ret, err := sj.journal.Next()
 				if err != nil {
 					return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
