@@ -34,32 +34,46 @@ func runIntegrationJournalList(t *testing.T) {
 	// Give the dummy service a second to generate a log entry
 	time.Sleep(2 * time.Second)
 
-	params := &journal.ListLogParams{
-		Unit:  "dummy.service",
-		Count: 10,
+	tests := []struct {
+		name      string
+		unit      []string
+		exactUnit bool
+	}{
+		{"Exact Unit", []string{"dummy.service"}, true},
+		{"Regex Unit", []string{"dum.*\\.service"}, false},
 	}
 
-	res, _, err := hostLog.ListLog(ctx, nil, params)
-	if !assert.NoError(t, err) || !assert.NotNil(t, res) {
-		t.Fatalf("ListLog failed or returned nil result")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := &journal.ListLogParams{
+				Unit:      tt.unit,
+				ExactUnit: tt.exactUnit,
+				Count:     10,
+			}
+
+			res, _, err := hostLog.ListLog(ctx, nil, params)
+			if !assert.NoError(t, err) || !assert.NotNil(t, res) {
+				t.Fatalf("ListLog failed or returned nil result")
+			}
+
+			assert.True(t, len(res.Content) > 0)
+			textContent, ok := res.Content[0].(*mcp.TextContent)
+			assert.True(t, ok)
+
+			var logRes journal.ListLogResult
+			err = json.Unmarshal([]byte(textContent.Text), &logRes)
+			assert.NoError(t, err)
+
+			found := false
+			for _, msg := range logRes.Messages {
+				if strings.Contains(msg.Msg, "Hello from dummy service") {
+					found = true
+					break
+				}
+			}
+			assert.True(t, found, "Expected to find dummy service log message")
+		})
 	}
-
-	assert.True(t, len(res.Content) > 0)
-	textContent, ok := res.Content[0].(*mcp.TextContent)
-	assert.True(t, ok)
-
-	var logRes journal.ListLogResult
-	err = json.Unmarshal([]byte(textContent.Text), &logRes)
-	assert.NoError(t, err)
-
-	found := false
-	for _, msg := range logRes.Messages {
-		if strings.Contains(msg.Msg, "Hello from dummy service") {
-			found = true
-			break
-		}
-	}
-	assert.True(t, found, "Expected to find dummy service log message")
 }
 
 func TestIntegrationJournal(t *testing.T) {

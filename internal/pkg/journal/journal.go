@@ -41,13 +41,14 @@ func (log *HostLog) Close() error {
 }
 
 type ListLogParams struct {
-	Count    int       `json:"count,omitempty" jsonschema:"Number of log lines to output"`
-	Offset   int       `json:"offset,omitempty" jsonschema:"Number of newest log entries to skip for pagination"`
-	From     time.Time `json:"from,omitempty" jsonschema:"Start time for filtering logs"`
-	To       time.Time `json:"to,omitempty" jsonschema:"End time for filtering logs "`
-	Pattern  string    `json:"pattern,omitempty" jsonschema:"Regular expression pattern to filter log messages."`
-	Unit     string    `json:"unit,omitempty" jsonschema:"Exact name of the service/unit from which to get the logs. Without an unit name the entries of all units are returned. This parameter is optional."`
-	AllBoots bool      `json:"allboots,omitempty" jsonschema:"Get the log entries from all boots, not just the active one"`
+	Count     int       `json:"count,omitempty" jsonschema:"Number of log lines to output"`
+	Offset    int       `json:"offset,omitempty" jsonschema:"Number of newest log entries to skip for pagination"`
+	From      time.Time `json:"from,omitempty" jsonschema:"Start time for filtering logs"`
+	To        time.Time `json:"to,omitempty" jsonschema:"End time for filtering logs "`
+	Pattern   string    `json:"pattern,omitempty" jsonschema:"Regular expression pattern to filter log messages or units."`
+	Unit      []string  `json:"unit,omitempty" jsonschema:"Names of the service/unit from which to get the logs. Without an unit name the entries of all units are returned. The first field treated a regular expression if not set otherwise"`
+	ExactUnit bool      `json:"exact_unit,omitempty" jsonschema:"Treat the first name unit as exact idendtifier and not as regular expression"`
+	AllBoots  bool      `json:"allboots,omitempty" jsonschema:"Get the log entries from all boots, not just the active one"`
 }
 
 type LogOutput struct {
@@ -185,24 +186,70 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		return nil, nil, fmt.Errorf("calling method was canceled by user")
 	}
 	sj.journal.FlushMatches()
-	if params.Unit != "" {
-		if err := sj.journal.AddMatch("SYSLOG_IDENTIFIER=" + params.Unit); err != nil {
-			return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
+	if len(params.Unit) > 0 {
+		firstUnit := params.Unit[0]
+		var re *regexp.Regexp
+		var err error
+		if !params.ExactUnit {
+			re, err = regexp.Compile(firstUnit)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid regular expression in unit: %w", err)
+			}
 		}
-		if err := sj.journal.AddDisjunction(); err != nil {
-			return nil, nil, err
-		}
-		if err := sj.journal.AddMatch("_SYSTEMD_USER_UNIT=" + params.Unit); err != nil {
-			return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
-		}
-		if err := sj.journal.AddDisjunction(); err != nil {
-			return nil, nil, err
-		}
-		if err := sj.journal.AddMatch("_SYSTEMD_UNIT=" + params.Unit); err != nil {
-			return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
-		}
-		if err := sj.journal.AddConjunction(); err != nil {
-			return nil, nil, err
+
+		if re != nil {
+			fields := []string{"SYSLOG_IDENTIFIER", "_SYSTEMD_USER_UNIT", "_SYSTEMD_UNIT"}
+			added := false
+			for _, field := range fields {
+				values, err := sj.journal.GetUniqueValues(field)
+				if err != nil {
+					continue
+				}
+				for _, v := range values {
+					if re.MatchString(v) {
+						if added {
+							if err := sj.journal.AddDisjunction(); err != nil {
+								return nil, nil, err
+							}
+						}
+						if err := sj.journal.AddMatch(field + "=" + v); err != nil {
+							return nil, nil, err
+						}
+						added = true
+					}
+				}
+			}
+			if added {
+				if err := sj.journal.AddConjunction(); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				if err := sj.journal.AddMatch("_SYSTEMD_UNIT=__NO_MATCH__"); err != nil {
+					return nil, nil, err
+				}
+				if err := sj.journal.AddConjunction(); err != nil {
+					return nil, nil, err
+				}
+			}
+		} else {
+			if err := sj.journal.AddMatch("SYSLOG_IDENTIFIER=" + firstUnit); err != nil {
+				return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
+			}
+			if err := sj.journal.AddDisjunction(); err != nil {
+				return nil, nil, err
+			}
+			if err := sj.journal.AddMatch("_SYSTEMD_USER_UNIT=" + firstUnit); err != nil {
+				return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
+			}
+			if err := sj.journal.AddDisjunction(); err != nil {
+				return nil, nil, err
+			}
+			if err := sj.journal.AddMatch("_SYSTEMD_UNIT=" + firstUnit); err != nil {
+				return nil, nil, fmt.Errorf("failed to add unit filter: %w", err)
+			}
+			if err := sj.journal.AddConjunction(); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	if !params.AllBoots {
@@ -235,17 +282,6 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 	uniqExeName := make(map[string]bool)
 	host, _ := os.Hostname()
 
-	var fromTime, toTime time.Time
-	var hasFromFilter, hasToFilter bool
-	if !params.From.IsZero() {
-		fromTime = params.From
-		hasFromFilter = true
-	}
-	if !params.To.IsZero() {
-		toTime = params.To
-		hasToFilter = true
-	}
-
 	var regexPattern *regexp.Regexp
 	if params.Pattern != "" {
 		var err error
@@ -264,12 +300,12 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 	for {
 		entry, err := sj.journal.GetEntry()
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get log entry for %s", params.Unit)
+			return nil, nil, fmt.Errorf("failed to get log entry for %v", params.Unit)
 		}
 
 		timestamp := time.Unix(0, int64(entry.RealtimeTimestamp)*int64(time.Microsecond))
 
-		if hasFromFilter && timestamp.Before(fromTime) {
+		if !params.To.IsZero() && timestamp.Before(params.To) {
 
 			ret, err := sj.journal.Next()
 			if err != nil {
@@ -281,7 +317,7 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 			continue
 		}
 
-		if hasToFilter && timestamp.After(toTime) {
+		if !params.From.IsZero() && timestamp.After(params.From) {
 			ret, err := sj.journal.Next()
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
@@ -293,8 +329,11 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		}
 
 		if regexPattern != nil {
-			message := entry.Fields["MESSAGE"]
-			if !regexPattern.MatchString(message) {
+			var messages strings.Builder
+			for _, v := range entry.Fields {
+				messages.WriteString(v)
+			}
+			if !regexPattern.MatchString(messages.String()) {
 				ret, err := sj.journal.Next()
 				if err != nil {
 					return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
@@ -368,7 +407,7 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 			messages[i].UnitName = ""
 		}
 	}
-	if params.Unit != "" {
+	if len(params.Unit) > 0 {
 		for exe := range uniqExeName {
 			if exe == "" {
 				continue
