@@ -221,7 +221,7 @@ WantedBy=multi-user.target
 	resultLog, err := mcpSession.CallTool(ctx, &mcp.CallToolParams{
 		Name: "list_log",
 		Arguments: map[string]any{
-			"unit":     "dummy.service",
+			"unit":     []string{"dummy.service"},
 			"allboots": true,
 		},
 	})

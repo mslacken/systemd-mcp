@@ -15,7 +15,7 @@ build: version $(godeps)
 	go build -o $(GO_BIN) -mod=vendor .
 
 test-client: version $(godeps)
-	go build -o test-client -mod=vendor ./test
+	go build -o test-client -mod=vendor ./testClient
 
 version:
 	@if git rev-parse --git-dir > /dev/null 2>&1; then \
