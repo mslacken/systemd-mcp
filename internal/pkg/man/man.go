@@ -21,6 +21,30 @@ type GetManPageParams struct {
 	Chapters []string `json:"chapters,omitempty" jsonschema:"List of chapters to retrieve (e.g. ['NAME', 'SYNOPSIS'])"`
 }
 
+// Executor interface for running external commands.
+type Executor interface {
+	Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error)
+}
+
+// DefaultExecutor uses os/exec to run commands.
+type DefaultExecutor struct{}
+
+func (e *DefaultExecutor) Run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(cmd.Environ(), "COLUMNS=80", "MAN_POSIXLY_CORRECT=1")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.Bytes(), stderr.Bytes(), err
+}
+
+var globalExecutor Executor = &DefaultExecutor{}
+
+func SetExecutor(e Executor) {
+	globalExecutor = e
+}
+
 type ManPageResult struct {
 	Content    string   `json:"content"`
 	Chapters   []string `json:"chapters"`
