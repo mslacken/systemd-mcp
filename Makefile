@@ -58,7 +58,7 @@ certs:
 	openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"
 
 dist: build vendor
-	tar -czvf $(GO_BIN).tar.gz --exclude-vcs --transform 's,^\.,$(GO_BIN),' --exclude=$(GO_BIN).tar.gz --exclude=tmp_dbus .
+	tar -czf $(GO_BIN).tar.gz --exclude-vcs --transform 's,^\.,$(GO_BIN),' --exclude=$(GO_BIN).tar.gz --exclude=tmp_dbus .
 
 install: build policyinstall
 	install -D -m 0755 $(GO_BIN) $(DESTDIR)$(PREFIX)/bin/$(GO_BIN)
