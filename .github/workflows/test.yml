@@ -15,7 +15,7 @@ jobs:
     - name: Install deps
       run: |
         sudo apt-get update
-        sudo apt-get install libsystemd-dev podman
+        sudo apt-get install libsystemd-dev podman bats
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
@@ -26,3 +26,9 @@ jobs:
 
     - name: Test
       run: go test -mod=vendor -v ./...
+
+    - name: Run BATS unit tests
+      run: bats test/unit-test.bats
+
+    - name: Run BATS integration tests
+      run: bats test/keycloak-tests.bats

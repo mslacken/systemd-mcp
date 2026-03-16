@@ -1,0 +1,21 @@
+FROM registry.opensuse.org/opensuse/bci/bci-init:latest
+
+RUN zypper install -y go git make systemd-devel
+
+WORKDIR /src
+ADD systemd-mcp.tar.gz .
+RUN cd systemd-mcp && make build && make install
+RUN cd systemd-mcp/testClient && go build -o /usr/local/bin/mcp-client main.go
+
+# Copy configs for polkit from the source
+RUN cp systemd-mcp/configs/org.opensuse.systemdmcp.conf /etc/dbus-1/system.d/
+RUN cp systemd-mcp/configs/org.opensuse.systemdmcp.policy /usr/share/polkit-1/actions/
+
+# Add dummy service
+RUN printf "[Unit]\nDescription=Dummy Service\n\n[Service]\nExecStart=/bin/sh -c 'while true; do echo \"Dummy log line at \$(date)\"; sleep 1; done'\n[Install]\nWantedBy=multi-user.target\n" > /etc/systemd/system/dummy.service
+RUN systemctl enable dummy.service
+
+# Add a non-root user for testing authorization failure
+RUN useradd -m testuser
+
+# The default ENTRYPOINT for bci-init is /usr/lib/systemd/systemd

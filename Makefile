@@ -15,7 +15,7 @@ build: version $(godeps)
 	go build -o $(GO_BIN) -mod=vendor .
 
 test-client: version $(godeps)
-	go build -o test-client -mod=vendor ./test
+	go build -o test-client -mod=vendor ./testClient
 
 version:
 	@if git rev-parse --git-dir > /dev/null 2>&1; then \
@@ -58,7 +58,7 @@ certs:
 	openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"
 
 dist: build vendor
-	tar -czvf $(GO_BIN).tar.gz --exclude-vcs --transform 's,^\.,$(GO_BIN),' --exclude=$(GO_BIN).tar.gz --exclude=tmp_dbus .
+	tar -czf $(GO_BIN).tar.gz --exclude-vcs --transform 's,^\.,$(GO_BIN),' --exclude=$(GO_BIN).tar.gz --exclude=tmp_dbus .
 
 install: build policyinstall
 	install -D -m 0755 $(GO_BIN) $(DESTDIR)$(PREFIX)/bin/$(GO_BIN)
