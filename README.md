@@ -1,5 +1,9 @@
 # Model Context Protocol (MCP) for systemd
 
+![Test Status](https://github.com/mslacken/systemd-mcp/actions/workflows/test.yml/badge.svg)
+![Build Status](https://github.com/mslacken/systemd-mcp/actions/workflows/build.yml/badge.svg)
+![Release Status](https://github.com/mslacken/systemd-mcp/actions/workflows/release.yml/badge.svg)
+
 The server directly connects to systemd via its C API and so doesn't need systemctl to run.
 
 # Installation
