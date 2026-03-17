@@ -15,9 +15,12 @@ setup_file() {
   
   cd ${BATS_TEST_DIRNAME}
   # Rebuild the image to ensure it has the latest changes
-  podman build -t systemd-mcp-leap16 -f leap16.docker .
+  podman build -t systemd-mcp-bci -f bci-init.docker .
   
-  podman network create $NETWORK_NAME
+  podman network create $NETWORK_NAME || {
+    echo "# Failed to create network $NETWORK_NAME" >&3
+    return 1
+  }
   
   # 1. Start Keycloak
   podman run -d --name $KEYCLOAK_CONTAINER --network $NETWORK_NAME \
@@ -55,7 +58,7 @@ setup_file() {
     -p 8080 \
     -v ${BATS_TEST_DIRNAME}/../server.crt:/etc/ssl/certs/server.crt:Z \
     -v ${BATS_TEST_DIRNAME}/../server.key:/etc/ssl/private/server.key:Z \
-    systemd-mcp-leap16
+    systemd-mcp-bci
     
   # 4. Wait for systemd
   echo "# Waiting for systemd..." >&3
@@ -102,6 +105,7 @@ teardown_file() {
   podman rm -f $CONTAINER_NAME || true
   podman rm -f $KEYCLOAK_CONTAINER || true
   podman network rm $NETWORK_NAME || true
+  rm -f ${BATS_TEST_DIRNAME}/systemd-mcp.tar.gz
 }
 
 @test "Unauthorized access should fail" {
