@@ -31,4 +31,7 @@ jobs:
       run: bats test/unit-test.bats
 
     - name: Run BATS integration tests
+      run: bats test/intergrated-tests.bats
+
+    - name: Run BATS keycloak tests
       run: bats test/keycloak-tests.bats

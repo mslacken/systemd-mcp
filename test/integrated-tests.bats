@@ -20,9 +20,9 @@ setup_file() {
   make dist
   cp systemd-mcp.tar.gz ${BATS_TEST_DIRNAME}
   cd ${BATS_TEST_DIRNAME}
-  podman build -t systemd-mcp-leap16 -f leap16.docker .
+  podman build -t systemd-mcp-bci -f bci-init.docker .
   
-  podman run -d --name $CONTAINER_NAME --privileged systemd-mcp-leap16
+  podman run -d --name $CONTAINER_NAME --privileged systemd-mcp-bci
   
   for i in {1..30}; do
     if podman exec $CONTAINER_NAME systemctl is-system-running | grep -qE "running|degraded"; then
@@ -36,10 +36,11 @@ setup_file() {
 
 teardown_file() {
   podman rm -f $CONTAINER_NAME || true
+  rm -f ${BATS_TEST_DIRNAME}/systemd-mcp.tar.gz
 }
 
 @test "Run systemd-mcp --noauth without parameter must fail" {
-  run podman run --entrypoint systemd-mcp systemd-mcp-leap16 --noauth
+  run podman run --entrypoint systemd-mcp systemd-mcp-bci --noauth
   [ "$status" -ne 0 ]
 }
 
