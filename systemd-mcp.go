@@ -26,6 +26,7 @@ import (
 	"github.com/openSUSE/systemd-mcp/remoteauth"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"kernel.org/pub/linux/libs/security/libcap/cap"
 )
 
 const (
@@ -43,6 +44,18 @@ func systemdScopes() []string {
 }
 
 func main() {
+	noauthRequested := false
+	for _, arg := range os.Args {
+		if arg == "--noauth" || strings.HasPrefix(arg, "--noauth=") {
+			noauthRequested = true
+			empty := cap.NewSet()
+			if err := empty.SetProc(); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to drop capabilities: %v\n", err)
+				os.Exit(1)
+			}
+			break
+		}
+	}
 	var err error
 	// DO NOT SET DEFAULTS HERE
 	pflag.String("http", "", "if set, use streamable HTTP at this address, instead of stdin/stdout")
@@ -100,6 +113,10 @@ func main() {
 	}
 	slog.SetDefault(logger)
 	slog.Debug("Logger initialized", "level", logLevel)
+
+	if noauthRequested {
+		slog.Debug("Dropped capabilities because --noauth is set")
+	}
 
 	authorization := &authkeeper.AuthKeeper{}
 	if viper.GetString("noauth") == magicNoauth && viper.GetString("controller") == "" {
