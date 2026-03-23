@@ -2,12 +2,15 @@ package dbus
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -383,4 +386,84 @@ func (a *DbusAuth) IsWriteAuthorized(ctx context.Context) (bool, error) {
 	default:
 		return state, nil
 	}
+}
+
+// getProcessStartTime returns the start time of a process in clock ticks since system boot.
+func getProcessStartTime(pid int32) (uint64, int32, error) {
+	statPath := fmt.Sprintf("/proc/%d/stat", pid)
+	data, err := os.ReadFile(statPath)
+	if err != nil {
+		return 0, -1, fmt.Errorf("failed to read %s: %w", statPath, err)
+	}
+
+	// The filename (second field) can contain spaces and parentheses,
+	// so we find the last closing parenthesis and start from there.
+	lastParen := bytes.LastIndexByte(data, ')')
+	if lastParen == -1 || lastParen+2 >= len(data) {
+		return 0, -1, fmt.Errorf("failed to parse %s", statPath)
+	}
+
+	fields := strings.Fields(string(data[lastParen+2:]))
+	// field 22 in /proc/[pid]/stat is starttime (index 19 in fields since fields starts from index 0 which is field 3)
+	if len(fields) < 20 {
+		return 0, -1, fmt.Errorf("not enough fields in %s", statPath)
+	}
+
+	startTime, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil {
+		return 0, -1, fmt.Errorf("failed to parse starttime in %s: %w", statPath, err)
+	}
+
+	// Get UID
+	var stat syscall.Stat_t
+	if err := syscall.Stat(fmt.Sprintf("/proc/%d", pid), &stat); err != nil {
+		return 0, -1, fmt.Errorf("failed to stat /proc/%d: %w", pid, err)
+	}
+
+	return startTime, int32(stat.Uid), nil
+}
+
+// CheckPolkitByPID checks if the given PID is authorized for the given actionID.
+func CheckPolkitByPID(pid int32, actionID string) (bool, error) {
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return false, fmt.Errorf("could not connect to system dbus: %w", err)
+	}
+	defer conn.Close()
+
+	startTime, uid, err := getProcessStartTime(pid)
+	if err != nil {
+		return false, fmt.Errorf("failed to get process info for PID %d: %w", pid, err)
+	}
+
+	subject := struct {
+		A string
+		B map[string]dbus.Variant
+	}{
+		"unix-process",
+		map[string]dbus.Variant{
+			"pid":        dbus.MakeVariant(uint32(pid)),
+			"start-time": dbus.MakeVariant(uint64(startTime)),
+			"uid":        dbus.MakeVariant(int32(uid)),
+		},
+	}
+
+	details := make(map[string]string)
+	flags := uint32(1) // AllowUserInteraction
+	cancellationID := ""
+	var result struct {
+		IsAuthorized bool
+		IsChallenge  bool
+		Details      map[string]dbus.Variant
+	}
+
+	pkObj := conn.Object("org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority")
+	err = pkObj.Call("org.freedesktop.PolicyKit1.Authority.CheckAuthorization", 0,
+		subject, actionID, details, flags, cancellationID).Store(&result)
+
+	if err != nil {
+		return false, fmt.Errorf("error checking authorization: %w", err)
+	}
+
+	return result.IsAuthorized, nil
 }

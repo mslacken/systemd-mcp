@@ -1,18 +1,27 @@
-GO_BIN=systemd-mcp
 GO_FILES=$(shell find . -type f -name '*.go' -not -path "./vendor/*")
 godeps=$(shell 2>/dev/null go list -mod vendor -deps -f '{{if not .Standard}}{{ $dep := . }}{{range .GoFiles}}{{$dep.Dir}}/{{.}} {{end}}{{end}}' $(1) | sed "s%$(shell pwd)/%%g")
 
 # Install parameters
 PREFIX ?= /usr
 DESTDIR ?=
-POLICYDIR ?= $(DESTDIR)$(PREFIX)/share
+BINDIR ?= $(PREFIX)/bin
+SBINDIR ?= $(PREFIX)/sbin
+DATADIR ?= $(PREFIX)/share
+SYSTEMDDIR ?= $(PREFIX)/lib/systemd/system
+DBUSDIR ?= $(DATADIR)/dbus-1/system.d
+POLKITDIR ?= $(DATADIR)/polkit-1/actions
+
+GO = go
+GOFLAGS = 
 
 .PHONY: all build test-client vendor test format lint clean dist install version
 
 all: build test-client
 
 build: version $(godeps)
-	go build -o $(GO_BIN) -mod=vendor .
+	mkdir -p bin
+	$(GO) build $(GOFLAGS) -o bin/systemd-mcp -mod=vendor .
+	$(GO) build $(GOFLAGS) -o bin/gatekeeper  -mod=vendor ./gatekeeper
 
 test-client: version $(godeps)
 	go build -o test-client -mod=vendor ./testClient
@@ -51,19 +60,22 @@ lint:
 	golangci-lint run ./...
 
 clean:
-	rm -rf $(GO_BIN) ./vendor server.crt server.key
+	rm -rf ./bin ./vendor server.crt server.key
 	go clean -modcache
 
 certs:
 	openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt -days 365 -nodes -subj "/CN=localhost"
 
 dist: version vendor
-	tar -czf $(GO_BIN).tar.gz --transform 's,^,$(GO_BIN)/,' $(shell git ls-files) vendor/
+	tar -czf systemd-mcp.tar.gz --transform 's,^,systemd-mcp/,' $(shell git ls-files) vendor/
 
 install: build policyinstall
-	install -D -m 0755 $(GO_BIN) $(DESTDIR)$(PREFIX)/bin/$(GO_BIN)
+	install -D -m 0755 bin/systemd-mcp $(DESTDIR)$(BINDIR)/systemd-mcp
+	install -D -m 0755 bin/gatekeeper $(DESTDIR)$(SBINDIR)/gatekeeper
 
 policyinstall:
-	install -D -m 0644 configs/org.opensuse.systemdmcp.policy $(POLICYDIR)/polkit-1/actions/org.opensuse.systemdmcp.policy
-	install -D -m 0644 configs/org.opensuse.systemdmcp.conf   $(POLICYDIR)/dbus-1/system.d/org.opensuse.systemdmcp.conf
+	install -D -m 0644 configs/org.opensuse.systemdmcp.policy $(DESTDIR)$(POLKITDIR)/org.opensuse.systemdmcp.policy
+	install -D -m 0644 configs/org.opensuse.systemdmcp.conf   $(DESTDIR)$(DBUSDIR)/org.opensuse.systemdmcp.conf
+	install -D -m 0644 configs/gatekeeper.service $(DESTDIR)$(SYSTEMDDIR)/gatekeeper.service
+	install -D -m 0644 configs/com.suse.gatekeeper.policy $(DESTDIR)$(POLKITDIR)/com.suse.gatekeeper.policy
 

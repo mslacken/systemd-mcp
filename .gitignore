@@ -1,6 +1,7 @@
 # ignore binary
 systemd-mcp
 test-client
+bin/*
 # ignore the vendored stuff
 vendor/*
 *tar.gz

@@ -27,11 +27,38 @@ jobs:
     - name: Test
       run: go test -mod=vendor -v ./...
 
-    - name: Run BATS unit tests
-      run: bats test/unit-test.bats
-
-    - name: Run BATS integration tests
-      run: bats test/intergrated-tests.bats
-
-    - name: Run BATS keycloak tests
-      run: bats test/keycloak-tests.bats
+    - name: Run BATS tests
+      shell: bash
+      run: |
+        echo "### BATS Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "| File | Test Case | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "| :--- | :--- | :---: |" >> $GITHUB_STEP_SUMMARY
+        
+        EXIT_CODE=0
+        for test_file in test/unit-test.bats test/integrated-tests.bats test/keycloak-tests.bats; do
+          if [ ! -f "$test_file" ]; then
+            echo "::warning::Test file $test_file not found"
+            continue
+          fi
+          
+          echo "::group::Running $test_file"
+          # Run bats and capture TAP output
+          # We use a temp file to avoid issues with large outputs in variables
+          # and to make parsing easier.
+          bats --formatter tap "$test_file" | tee test_output.tap || EXIT_CODE=1
+          
+          while read -r line; do
+            if [[ $line =~ ^ok\ [0-9]+\ (.*) ]]; then
+              test_name="${BASH_REMATCH[1]}"
+              # Escape pipes in test names for Markdown table
+              echo "| $test_file | ${test_name//|/\\|} | ✅ |" >> $GITHUB_STEP_SUMMARY
+            elif [[ $line =~ ^not\ ok\ [0-9]+\ (.*) ]]; then
+              test_name="${BASH_REMATCH[1]}"
+              echo "| $test_file | ${test_name//|/\\|} | ❌ |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done < test_output.tap
+          rm test_output.tap
+          echo "::endgroup::"
+        done
+        
+        exit $EXIT_CODE
