@@ -1,0 +1,15 @@
+[Unit]
+Description=Gatekeeper Service
+After=network.target
+
+[Service]
+ExecStart=gatekeeper
+Restart=always
+User=gatekeeper
+DynamicUser=yes
+RuntimeDirectory=gatekeeper
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=CAP_DAC_READ_SEARCH
+
+[Install]
+WantedBy=multi-user.target

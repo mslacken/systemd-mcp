@@ -221,47 +221,45 @@ func main() {
 			},
 		)
 	}
-	if journal.CanAccessLogs() {
-		log, err := journal.NewLog(authorization)
-		if err != nil {
-			slog.Warn("couldn't open log, not adding journal tool", slog.Any("error", err))
-		} else {
-			tools = append(tools, struct {
-				Tool     *mcp.Tool
-				Register func(server *mcp.Server, tool *mcp.Tool)
-			}{
-				Tool: &mcp.Tool{
-					Name:        "list_log",
-					Description: "Get the last log entries for the given service or unit.",
-					InputSchema: journal.CreateListLogsSchema(),
-				},
-				Register: func(server *mcp.Server, tool *mcp.Tool) {
-					mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *journal.ListLogParams) (*mcp.CallToolResult, any, error) {
-						slog.Debug("list_log called", "args", args)
-						res, out, err := log.ListLog(ctx, req, args)
-						return res, out, err
-					})
-				},
-			}, struct {
-				Tool     *mcp.Tool
-				Register func(server *mcp.Server, tool *mcp.Tool)
-			}{
-				Tool: &mcp.Tool{
-					Name:        "get_file",
-					Description: "Read a file from the system. Can show content and metadata. Supports pagination for large files.",
-					InputSchema: file.CreateFileSchema(),
-				},
-				Register: func(server *mcp.Server, tool *mcp.Tool) {
-					mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *file.GetFileParams) (*mcp.CallToolResult, any, error) {
-						slog.Debug("get_file called", "args", args)
-						res, out, err := file.GetFile(ctx, req, args)
-						return res, out, err
-					})
-				},
-			})
-		}
+	syslog := journal.HostLog{
+		Auth: authorization,
+	}
+	if err != nil {
+		slog.Warn("couldn't open log, not adding journal tool", slog.Any("error", err))
 	} else {
-		slog.Warn("Couldn't access the logs, removing the tools \"list_log\" and \"get_file\"")
+		tools = append(tools, struct {
+			Tool     *mcp.Tool
+			Register func(server *mcp.Server, tool *mcp.Tool)
+		}{
+			Tool: &mcp.Tool{
+				Name:        "list_log",
+				Description: "Get the last log entries for the given service or unit.",
+				InputSchema: journal.CreateListLogsSchema(),
+			},
+			Register: func(server *mcp.Server, tool *mcp.Tool) {
+				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *journal.ListLogParams) (*mcp.CallToolResult, any, error) {
+					slog.Debug("list_log called", "args", args)
+					res, out, err := syslog.ListLog(ctx, req, args)
+					return res, out, err
+				})
+			},
+		}, struct {
+			Tool     *mcp.Tool
+			Register func(server *mcp.Server, tool *mcp.Tool)
+		}{
+			Tool: &mcp.Tool{
+				Name:        "get_file",
+				Description: "Read a file from the system. Can show content and metadata. Supports pagination for large files.",
+				InputSchema: file.CreateFileSchema(),
+			},
+			Register: func(server *mcp.Server, tool *mcp.Tool) {
+				mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *file.GetFileParams) (*mcp.CallToolResult, any, error) {
+					slog.Debug("get_file called", "args", args)
+					res, out, err := file.GetFile(ctx, req, args)
+					return res, out, err
+				})
+			},
+		})
 	}
 	tools = append(tools, struct {
 		Tool     *mcp.Tool

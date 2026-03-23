@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -19,20 +21,12 @@ import (
 	"github.com/coreos/go-systemd/v22/sdjournal"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	auth "github.com/openSUSE/systemd-mcp/authkeeper"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/sdjournalw"
 )
 
 type HostLog struct {
 	journal *sdjournal.Journal
-	auth    *auth.AuthKeeper
-}
-
-// NewLog instance creates a new HostLog instance
-func NewLog(auth *auth.AuthKeeper) (*HostLog, error) {
-	j, err := sdjournal.NewJournal()
-	if err != nil {
-		return nil, fmt.Errorf("failed to open journal: %w", err)
-	}
-	return &HostLog{journal: j, auth: auth}, nil
+	Auth    *auth.AuthKeeper
 }
 
 // Close the log and underlying journal
@@ -145,40 +139,88 @@ func (sj *HostLog) seekByTimeRange(params *ListLogParams) error {
 	return nil
 }
 
-/*
-func (sj *HostLog) ListLogTimeout(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
-	slog.Debug("ListLogTimeout called", "params", params)
-	timeoutCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
-	defer cancel()
-
-	resultChan := make(chan struct {
-		res *mcp.CallToolResult
-		out any
-		err error
-	}, 1)
-
-	go func() {
-		res, out, err := sj.ListLog(timeoutCtx, req, params)
-		resultChan <- struct {
-			res *mcp.CallToolResult
-			out any
-			err error
-		}{res: res, out: out, err: err}
-	}()
-
-	select {
-	case <-timeoutCtx.Done():
-		// The timeout context was cancelled, meaning the timeout occurred.
-		return nil, nil, fmt.Errorf("timed out: %w", timeoutCtx.Err())
-	case result := <-resultChan:
-		// ListLog completed within the timeout.
-		return result.res, result.out, result.err
+// this is a very unusual function, as we have two cases here:
+//  1. we run as root and have to asek via ouath2 that we are allowed to
+//     acess the journal
+//  2. we run as user and have to get the file pointer from the gatekeeper
+//     which triggers a polkit call. If the gatekeeper service isn't
+//     running we also have to start it
+//
+// In both cases we only want to annoy the user with a oauth2 or pplkit
+// call only if access to the log is requested and not at every startup.
+// This isn't an ideal solution, but I couldn't think of a better one
+func (sj *HostLog) self_init(ctx context.Context) (allowed bool, err error) {
+	if sj.journal != nil {
+		return sj.Auth.IsReadAuthorized(ctx)
 	}
+
+	allowed, err = sj.Auth.IsReadAuthorized(ctx)
+	if err != nil || !allowed {
+		return allowed, err
+	}
+
+	if os.Geteuid() == 0 {
+		// running as root, ask via oauth2 is read is authorized, if yes
+		// and journal isn't opened, open it
+		j, err := sdjournal.NewJournal()
+		if err != nil {
+			return false, fmt.Errorf("failed to open journal: %w", err)
+		}
+		sj.journal = j
+	} else {
+		addr, err := net.ResolveUnixAddr("unix", "/run/gatekeeper/gatekeeper.sock")
+		if err != nil {
+			return false, fmt.Errorf("failed to resolve gatekeeper socket: %w", err)
+		}
+		conn, err := net.DialUnix("unix", nil, addr)
+		if err != nil {
+			return false, fmt.Errorf("failed to connect to gatekeeper: %w", err)
+		}
+		defer conn.Close()
+
+		buf := make([]byte, 32)
+		oob := make([]byte, syscall.CmsgSpace(256*4)) // space for 256 fds
+		n, oobn, flags, _, err := conn.ReadMsgUnix(buf, oob)
+		if err != nil {
+			return false, fmt.Errorf("failed to read from gatekeeper: %w", err)
+		}
+
+		if flags&syscall.MSG_CTRUNC != 0 {
+			return false, fmt.Errorf("gatekeeper sent too many file descriptors (control message truncated)")
+		}
+
+		if string(buf[:n]) != "OK\n" {
+			return false, fmt.Errorf("gatekeeper error: %s", string(buf[:n]))
+		}
+
+		cmsgs, err := syscall.ParseSocketControlMessage(oob[:oobn])
+		if err != nil || len(cmsgs) == 0 {
+			return false, fmt.Errorf("no fds received from gatekeeper")
+		}
+
+		fds, err := syscall.ParseUnixRights(&cmsgs[0])
+		if err != nil || len(fds) == 0 {
+			return false, fmt.Errorf("no fds received from gatekeeper")
+		}
+
+		uintFds := make([]uintptr, len(fds))
+		for i, fd := range fds {
+			uintFds[i] = uintptr(fd)
+		}
+
+		j, err := sdjournalwarp.NewJournalFromHandle(uintFds)
+		if err != nil {
+			return false, fmt.Errorf("failed to open journal from fd: %w", err)
+		}
+		sj.journal = &j.Journal
+	}
+	return true, nil
 }
-*/
+
 // get the lat log entries for a given unit, else just the last messages
 func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params *ListLogParams) (*mcp.CallToolResult, any, error) {
-	allowed, err := sj.auth.IsReadAuthorized(ctx)
+	// always init the host log via self initialization, not via init or
+	allowed, err := sj.self_init(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -487,22 +529,4 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 			},
 		},
 	}, nil, nil
-}
-
-// CanAccessLogs checks if the current process has permission to access system logs.
-// It returns true if the process is running as root or can successfully open the systemd journal.
-func CanAccessLogs() bool {
-	// Check if running as root
-	if os.Geteuid() == 0 {
-		return true
-	}
-
-	// Attempt to open the journal to check for access.
-	// If NewJournal succeeds, it means the process has access to the log files.
-	j, err := sdjournal.NewJournal()
-	if err != nil {
-		return false
-	}
-	defer j.Close()
-	return true
 }
