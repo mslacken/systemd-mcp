@@ -168,7 +168,7 @@ func (sj *HostLog) self_init(ctx context.Context) (allowed bool, err error) {
 		}
 		sj.journal = j
 	} else {
-		addr, err := net.ResolveUnixAddr("unix", "/run/gatekeeper/gatekeeper.sock")
+		addr, err := net.ResolveUnixAddr("unix", "/run/gatekeeper/gatekeeper.socket")
 		if err != nil {
 			return false, fmt.Errorf("failed to resolve gatekeeper socket: %w", err)
 		}
