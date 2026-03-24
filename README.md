@@ -9,56 +9,50 @@ The server directly connects to systemd via its C API and so doesn't need system
 # Installation
 
 Compile directly with
+```bash
+  go build -o bin/systemd-mcp systemd-mcp.go
+  go build -o bin/gatekeeper gatekeeper/main.go
 ```
-  go build systemd-mcp.go
-```
-and install the policy files for polkit for local authentication with
-```
-  cp systemd-mcp /usr/local/bin/systemd-mcp
-  cp ./configs/org.opensuse.systemdmcp.conf /etc/dbus-1/system.d/
-  cp ./configs/org.opensuse.systemdmcp.policy /etc/polkit-1/actions/
-```
-or
-```
+or use the provided Makefile:
+```bash
   make build
 ```
 and install with
+```bash
+  sudo make install
+```
 
-```
-  make install
-```
+The `make install` command installs:
+*   `systemd-mcp` to `/usr/bin/systemd-mcp`
+*   `gatekeeper` to `/usr/sbin/gatekeeper`
+*   Systemd units for `gatekeeper.service` and `gatekeeper.socket`
+*   Polkit policy for `gatekeeper`
 
 # Security
 
 ## Stdio Transport (Polkit/DBus)
 
-When running over Stdio (default), `systemd-mcp` uses `polkit` and `dbus` for authorization. The `systemd-mcp` process itself runs in the context of the user and authorization is done via Polkit.
+When running over Stdio (default), `systemd-mcp` uses `polkit` for authorization. The process runs as the current user.
 
-**Configuration:**
-For this to work, the D-Bus and Polkit configuration files must be installed to the system paths:
-*   Copy `./configs/org.opensuse.systemdmcp.conf` to `/etc/dbus-1/system.d/`
-*   Copy `./configs/org.opensuse.systemdmcp.policy` to `/etc/polkit-1/actions/`
-
-**Privilege Elevation:**
-The daemon connects to the system bus. Operations requiring higher privileges (like writing to systemd units) trigger a PolicyKit (polkit) authentication request via D-Bus. If the user is not authorized, the operation will fail or prompt for authentication depending on the environment and policy settings.
+*   **Unit Management**: Operations like starting or stopping units trigger a polkit request for `org.freedesktop.systemd1.manage-units`.
+*   **Log Access**: To access system logs without root privileges, `systemd-mcp` connects to the `gatekeeper` via `/run/gatekeeper/gatekeeper.socket`. This triggers a polkit request for `com.suse.gatekeeper.readlog`.
 
 ## HTTP Transport (OAuth2)
 
 When running over HTTP (using `--http`), `systemd-mcp` uses OAuth2 for authorization.
 You must specify an OAuth2 controller address using `--controller`.
 
-Unlike Stdio mode which can use polkit for on-demand elevation, the HTTP server must be started with elevated privileges (e.g., as `root`) to ensure it has direct access to systemd and journal logs.
+*   **OAuth2 Configuration**:
+    *   **Audience**: `systemd-mcp-server`
+    *   **Supported Scopes**:
+        *   `mcp:read`: Allows read-only access (e.g., listing units, reading logs).
+        *   `mcp:write`: Allows write access (e.g., starting/stopping units).
 
-**OAuth2 Configuration:**
-The following values must be configured on your OAuth2 Authorization Server (controller) to match the expected credentials:
-*   **Audience**: `systemd-mcp-server`
-*   **Supported Scopes**:
-    *   `mcp:read`: Allows read-only access (e.g., listing units, reading logs).
-    *   `mcp:write`: Allows write access (e.g., starting/stopping units).
+If the HTTP server is started as a non-root user, it will also use the `gatekeeper` for log access, provided `gatekeeper.socket` is available. If started as `root`, it accesses the journal directly.
 
 ## HTTP Transport with authentication
 
-For debugging purposes and strictly for that, the `--noauth` flag can be used to access the mcp server without any further authentication step. In order to make sure that everybody knows that this is completely insecure the parameter has to be set to "ThisIsInsecure" in order to work.
+For debugging purposes, the `--noauth` flag can be used to access the MCP server without authentication. To ensure this is intentional, the flag must be set exactly to `ThisIsInsecure`.
 
 ### Self-signed certificates
 
@@ -68,28 +62,32 @@ To run the server in HTTP mode with TLS, you need a certificate and a key. You c
   make certs
 ```
 
-This will create `server.crt` and `server.key` in the current directory, which can then be used with the `--cert-file` and `--key-file` flags.
-
 # Command-line Options
 
 | Flag                | Shorthand | Description                                                                                             | Default |
 |---------------------|-----------|---------------------------------------------------------------------------------------------------------|---------|
 | `--http`            |           | If set, use streamable HTTP at this address, instead of stdin/stdout.                                   | `""`    |
 | `--skip-tls-verify` |           | Skip TLS certificate verification for outbound requests (e.g. to OAuth2 controller).                    | `false` |
-| `--controller`      |           | OAuth2 controller address (required for HTTP mode).                                                     | `""`    |
+| `--controller`      |           | OAuth2 controller address (required for HTTP mode unless `--noauth` is used).                           | `""`    |
 | `--logfile`         |           | If set, log to this file instead of stderr.                                                             | `""`    |
 | `--verbose`         | `-v`      | Enable verbose logging.                                                                                 | `false` |
 | `--debug`           | `-d`      | Enable debug logging.                                                                                   | `false` |
 | `--log-json`        |           | Output logs in JSON format (machine-readable).                                                          | `false` |
 | `--list-tools`      |           | List all available tools and exit.                                                                      | `false` |
-| `--allow-write`     | `-w`      | Authorize write to systemd or allow pending write if started without write.                             | `false` |
-| `--allow-read`      | `-r`      | Authorize read to systemd or allow pending read if started without read.                                | `false` |
-| `--enabled-tools`   |           | A list of tools to enable. Defaults to all tools.                                                       | all     |
-| `--timeout`         |           | Set the timeout for authentication in seconds.                                                          | `5`     |
-| `--noauth`          |           | Disable authorization via dbus/oauth2 always allow read and write access.                               | `false` |
-| `--cert-file`       |           | Path to server certificate file (PEM format) for TLS. Requires --key-file.                              | `""`    |
-| `--key-file`        |           | Path to server private key file (PEM format) for TLS. Requires --cert-file.                             | `""`    |
+| `--allow-write`     | `-w`      | Authorize write to systemd.                                                                             | `false` |
+| `--allow-read`      | `-r`      | Authorize read to systemd.                                                                              | `false` |
+| `--enabled-tools`   |           | A comma-separated list of tools to enable. Defaults to all tools.                                       | all     |
+| `--timeout`         |           | Set the timeout for polkit authentication in seconds.                                                   | `5`     |
+| `--noauth`          |           | Disable authorization. Must be set to `ThisIsInsecure`. Mutually exclusive with `--controller`.           | `""`    |
+| `--cert-file`       |           | Path to server certificate file (PEM format) for TLS. Requires `--key-file`.                            | `""`    |
+| `--key-file`        |           | Path to server private key file (PEM format) for TLS. Requires `--cert-file`.                           | `""`    |
 | `--version`         |           | Print the version and exit.                                                                             | `false` |
+
+## Required Flag Combinations
+
+*   **HTTP Mode**: Requires either `--controller` OR `--noauth=ThisIsInsecure`.
+*   **TLS**: Both `--cert-file` and `--key-file` must be provided together.
+*   **Authentication**: `--noauth` and `--controller` are mutually exclusive.
 
 # Functionality
 
