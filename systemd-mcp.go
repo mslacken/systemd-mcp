@@ -118,9 +118,9 @@ func main() {
 		slog.Debug("Dropped capabilities because --noauth is set")
 	}
 
-	authorization := &authkeeper.AuthKeeper{}
+	var authorization authkeeper.AuthKeeper
 	if viper.GetString("noauth") == magicNoauth && viper.GetString("controller") == "" {
-		authorization, _ = authkeeper.NewNoAuth()
+		authorization, _ = authkeeper.NewNoAuth(true, true)
 	} else if viper.GetString("http") != "" && viper.GetString("noauth") != magicNoauth {
 		if viper.GetString("controller") == "" {
 			slog.Error("controller needs to be set when http is set")
@@ -132,14 +132,11 @@ func main() {
 			os.Exit(1)
 		}
 	} else if viper.GetString("controller") == "" {
-		authorization, err = authkeeper.NewPolkitAuth(DBusName, DBusPath)
+		authorization, err = authkeeper.NewPolkitAuth(DBusName, DBusPath, viper.GetUint32("timeout"))
 		if err != nil {
 			slog.Error("failed to setup dbus", "error", err)
 			os.Exit(1)
 		}
-		authorization.Timeout = viper.GetUint32("timeout")
-		authorization.ReadAllowed = viper.GetBool("allow-read")
-		authorization.WriteAllowed = viper.GetBool("allow-write")
 	} else {
 		slog.Error("http needs either controller or noauth")
 		os.Exit(1)
@@ -330,7 +327,12 @@ func main() {
 				}
 			}
 		} else {
-			authMiddleware := auth.RequireBearerToken(authorization.Oauth2.VerifyJWT, &auth.RequireBearerTokenOptions{
+			oauthProvider, ok := authorization.(authkeeper.OAuth2Provider)
+			if !ok {
+				slog.Error("authorization is not an OAuth2Provider")
+				os.Exit(1)
+			}
+			authMiddleware := auth.RequireBearerToken(oauthProvider.VerifyJWT, &auth.RequireBearerTokenOptions{
 				Scopes: systemdScopes(),
 			})
 
@@ -357,7 +359,7 @@ func main() {
 					AuthorizationServers:   []string{viper.GetString("controller")},
 					ScopesSupported:        systemdScopes(),
 					BearerMethodsSupported: []string{"header"},
-					JWKSURI:                authorization.Oauth2.JwksUri,
+					JWKSURI:                oauthProvider.JwksUri(),
 				}
 				slog.Debug("Sending OAuth protected resource metadata", slog.Any("metadata", prm))
 				if err := json.NewEncoder(w).Encode(prm); err != nil {

@@ -26,7 +26,7 @@ import (
 
 type HostLog struct {
 	journal *sdjournal.Journal
-	Auth    *auth.AuthKeeper
+	Auth    auth.AuthKeeper
 }
 
 // Close the log and underlying journal
