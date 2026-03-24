@@ -7,48 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"github.com/godbus/dbus/v5/introspect"
 )
-
-// gets executable for nicer error messages
-func getExecutableName() string {
-	exe, err := os.Executable()
-	if err != nil {
-		slog.Error("could not determine executable name", "error", err)
-		return "systemd-mcp" // Fallback name
-	}
-	return filepath.Base(exe)
-}
-
-// IsDBusNameTaken checks if the dbus name is already taken.
-func IsDBusNameTaken(dbusName string) (bool, error) {
-	conn, err := dbus.ConnectSystemBus()
-	if err != nil {
-		return false, fmt.Errorf("could not connect to system dbus: %w", err)
-	}
-	defer conn.Close()
-
-	var names []string
-	err = conn.BusObject().Call("org.freedesktop.DBus.ListNames", 0).Store(&names)
-	if err != nil {
-		return false, err
-	}
-
-	for _, n := range names {
-		if n == dbusName {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
 
 type DbusAuth struct {
 	*dbus.Conn
@@ -264,54 +229,6 @@ func (a *DbusAuth) Deauthorize() *dbus.Error {
 		}
 	*/
 	return nil
-}
-
-// setup the dbus authorization call back. Creates AuthWrite and
-// AuthRead dbus methods so that authorization can be done by
-// another process calliing this methods.
-func SetupDBus(dbusName, dbusPath string) (*DbusAuth, error) {
-	conn, err := dbus.ConnectSystemBus()
-	if err != nil {
-		slog.Warn("could not connect to system dbus", "error", err)
-		return nil, err
-	}
-
-	keeper := &DbusAuth{
-		Conn:     conn,
-		Timeout:  30,
-		DbusName: dbusName,
-		DbusPath: dbusPath,
-	}
-
-	intro := `
-<node>
-	<interface name="` + dbusName + `">
-		<method name="AuthRead">
-		</method>
-		<method name="AuthWrite">
-		</method>
-		<method name="AuthRegister">
-		</method>
-		<method name="Deauthorize">
-		</method>
-</interface>` + introspect.IntrospectDataString + `</node> `
-
-	conn.Export(keeper, dbus.ObjectPath(dbusPath), dbusName)
-	conn.Export(introspect.Introspectable(intro), dbus.ObjectPath(dbusPath), "org.freedesktop.DBus.Introspectable")
-
-	reply, err := conn.RequestName(dbusName, dbus.NameFlagDoNotQueue)
-	if err != nil {
-		slog.Warn("could not request dbus name", "error", err)
-		conn.Close()
-		return nil, err
-	}
-	if reply != dbus.RequestNameReplyPrimaryOwner {
-		slog.Warn("dbus name already taken", "name", dbusName)
-		conn.Close()
-		return nil, fmt.Errorf("dbus name already taken")
-	}
-	slog.Debug("Listening on dbus", "name", dbusName)
-	return keeper, nil
 }
 
 // Check if read was authorized. Triggers also a call back via

@@ -14,11 +14,6 @@ import (
 	"github.com/openSUSE/systemd-mcp/remoteauth"
 )
 
-// IsDBusNameTaken checks if the dbus name is already taken.
-func IsDBusNameTaken(dbusName string) (bool, error) {
-	return dbus.IsDBusNameTaken(dbusName)
-}
-
 type AuthKeeper struct {
 	Dbus         *dbus.DbusAuth
 	Oauth2       *remoteauth.Oauth2Auth
@@ -53,13 +48,7 @@ const (
 
 // setup the dbus authorization call back.
 func NewPolkitAuth(dbusName, dbusPath string) (*AuthKeeper, error) {
-	d, err := dbus.SetupDBus(dbusName, dbusPath)
-	if err != nil {
-		return nil, err
-	}
-	return &AuthKeeper{
-		Dbus: d,
-	}, nil
+	return &AuthKeeper{}, nil
 }
 
 // no auth at all
