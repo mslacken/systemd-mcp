@@ -2,23 +2,11 @@ package dbus
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
-
-func TestGetExecutableName(t *testing.T) {
-	exeName := getExecutableName()
-	assert.NotEmpty(t, exeName, "Executable name should not be empty")
-
-	// We can verify that it matches the base name of os.Executable()
-	exePath, err := os.Executable()
-	if err == nil {
-		assert.Equal(t, filepath.Base(exePath), exeName)
-	}
-}
 
 func TestGetSessionIdFromPid_Self(t *testing.T) {
 	// Let's try to get session ID for our own PID.

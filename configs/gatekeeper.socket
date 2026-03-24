@@ -1,0 +1,10 @@
+[Unit]
+Description=Gatekeeper Socket
+
+[Socket]
+ListenStream=/run/gatekeeper/gatekeeper.socket
+SocketMode=0666
+RuntimeDirectory=gatekeeper
+
+[Install]
+WantedBy=sockets.target

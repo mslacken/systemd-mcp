@@ -13,9 +13,3 @@ func TestCreateListLogsSchema(t *testing.T) {
 	assert.Contains(t, schema.Properties, "offset")
 	assert.Contains(t, schema.Properties, "unit")
 }
-
-func TestCanAccessLogs(t *testing.T) {
-	// This might return true or false depending on the environment,
-	// but we can check it doesn't panic.
-	_ = CanAccessLogs()
-}

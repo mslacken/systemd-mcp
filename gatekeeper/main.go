@@ -9,13 +9,14 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/coreos/go-systemd/v22/activation"
 	"github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
 var (
-	sockAddr = "/run/gatekeeper/gatekeeper.sock"
+	sockAddr = "/run/gatekeeper/gatekeeper.socket"
 	target   = "/var/log/journal"
 	actionID = "com.suse.gatekeeper.readlog"
 )
@@ -30,27 +31,40 @@ func main() {
 	viper.AutomaticEnv()
 	viper.BindPFlags(pflag.CommandLine)
 
-	if err := os.RemoveAll(sockAddr); err != nil {
-		log.Fatalf("Failed to remove old socket: %v", err)
-	}
+	var l *net.UnixListener
 
-	addr, err := net.ResolveUnixAddr("unix", sockAddr)
-	if err != nil {
-		log.Fatalf("Failed to resolve socket: %v", err)
-	}
+	listeners, err := activation.Listeners()
+	if err == nil && len(listeners) > 0 {
+		if len(listeners) > 1 {
+			log.Fatalf("Too many listeners: %d", len(listeners))
+		}
+		var ok bool
+		l, ok = listeners[0].(*net.UnixListener)
+		if !ok {
+			log.Fatalf("Listener is not a unix listener")
+		}
+		log.Println("Gatekeeper using systemd socket activation")
+	} else {
+		if err := os.RemoveAll(sockAddr); err != nil {
+			log.Fatalf("Failed to remove old socket: %v", err)
+		}
 
-	l, err := net.ListenUnix("unix", addr)
-	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
+		addr, err := net.ResolveUnixAddr("unix", sockAddr)
+		if err != nil {
+			log.Fatalf("Failed to resolve socket: %v", err)
+		}
+
+		l, err = net.ListenUnix("unix", addr)
+		if err != nil {
+			log.Fatalf("Failed to listen: %v", err)
+		}
+
+		if err := os.Chmod(sockAddr, 0666); err != nil {
+			log.Fatalf("Failed to chmod socket: %v", err)
+		}
+		log.Println("Gatekeeper listening on", sockAddr)
 	}
 	defer l.Close()
-	defer os.Remove(sockAddr)
-
-	if err := os.Chmod(sockAddr, 0666); err != nil {
-		log.Fatalf("Failed to chmod socket: %v", err)
-	}
-
-	log.Println("Gatekeeper listening on", sockAddr)
 
 	for {
 		conn, err := l.AcceptUnix()
@@ -60,17 +74,6 @@ func main() {
 		}
 		go handleConnection(conn)
 	}
-}
-
-func isJournal(path string) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	var header [8]byte
-	n, err := f.Read(header[:])
-	return err == nil && n == 8 && string(header[:]) == "LPKSHHRH"
 }
 
 func handleConnection(conn *net.UnixConn) {
@@ -100,7 +103,7 @@ func handleConnection(conn *net.UnixConn) {
 		return
 	}
 
-	log.Printf("Polkit authorization successful for PID %d. Opening log files:", ucred.Pid)
+	log.Printf("Polkit authorization successful for PID %d. Opening log files.", ucred.Pid)
 
 	var fds []int
 	var files []*os.File
@@ -108,10 +111,9 @@ func handleConnection(conn *net.UnixConn) {
 	info, err := os.Stat(target)
 	if err == nil && info.IsDir() {
 		filepath.Walk(target, func(path string, info os.FileInfo, err error) error {
-			if err == nil && !info.IsDir() && strings.HasSuffix(path, ".journal") && isJournal(path) {
+			if err == nil {
 				f, err := os.Open(path)
 				if err == nil {
-					log.Printf("Gatekeeper opening journal file: %s", path)
 					files = append(files, f)
 					fds = append(fds, int(f.Fd()))
 				}
@@ -119,10 +121,9 @@ func handleConnection(conn *net.UnixConn) {
 			return nil
 		})
 	} else if err == nil {
-		if strings.HasSuffix(target, ".journal") && isJournal(target) {
+		if strings.HasSuffix(target, ".journal") {
 			f, err := os.Open(target)
 			if err == nil {
-				log.Printf("Gatekeeper opening journal file: %s", target)
 				files = append(files, f)
 				fds = append(fds, int(f.Fd()))
 			}
@@ -149,7 +150,5 @@ func handleConnection(conn *net.UnixConn) {
 	_, _, err = conn.WriteMsgUnix([]byte("OK\n"), rights, nil)
 	if err != nil {
 		log.Printf("Failed to send FDs: %v", err)
-	} else {
-		log.Printf("Sent %d FDs successfully", len(fds))
 	}
 }

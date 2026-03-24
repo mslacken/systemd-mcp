@@ -3,84 +3,137 @@ package authkeeper
 import (
 	"context"
 	"crypto/tls"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/MicahParks/keyfunc/v3"
 	godbus "github.com/godbus/dbus/v5"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/openSUSE/systemd-mcp/remoteauth"
 )
 
-// IsDBusNameTaken checks if the dbus name is already taken.
-func IsDBusNameTaken(dbusName string) (bool, error) {
-	return dbus.IsDBusNameTaken(dbusName)
+type AuthKeeper interface {
+	IsReadAuthorized(ctx context.Context) (bool, error)
+	IsWriteAuthorized(ctx context.Context) (bool, error)
+	Deauthorize() *godbus.Error
+	Close() error
 }
 
-type AuthKeeper struct {
-	Dbus         *dbus.DbusAuth
-	Oauth2       *remoteauth.Oauth2Auth
-	Timeout      uint32
-	ReadAllowed  bool
-	WriteAllowed bool
-	context      context.Context
+type noAuth struct {
+	readAllowed  bool
+	writeAllowed bool
 }
 
-func (a *AuthKeeper) Mode() AuthMode {
-	// this shouldn't happen
-	if a.Dbus != nil && a.Oauth2 != nil {
-		slog.Warn("ouath2 and dbus/polkit authentication defined", "auth", "noauth")
-		return noauth
-	}
-	if a.Dbus != nil {
-		return polkit
-	}
-	if a.Oauth2 != nil {
-		return oauth2
-	}
-	return noauth
+func (a *noAuth) IsReadAuthorized(ctx context.Context) (bool, error) {
+	return a.readAllowed, nil
 }
 
-type AuthMode uint
+func (a *noAuth) IsWriteAuthorized(ctx context.Context) (bool, error) {
+	return a.writeAllowed, nil
+}
 
-const (
-	noauth AuthMode = iota
-	oauth2
-	polkit
-)
+func (a *noAuth) Deauthorize() *godbus.Error {
+	return nil
+}
+
+func (a *noAuth) Close() error {
+	return nil
+}
+
+type polkitAuth struct {
+	dbus *dbus.DbusAuth
+}
+
+func (a *polkitAuth) IsReadAuthorized(ctx context.Context) (bool, error) {
+	return a.dbus.IsReadAuthorized(ctx)
+}
+
+func (a *polkitAuth) IsWriteAuthorized(ctx context.Context) (bool, error) {
+	return a.dbus.IsWriteAuthorized(ctx)
+}
+
+func (a *polkitAuth) Deauthorize() *godbus.Error {
+	return a.dbus.Deauthorize()
+}
+
+func (a *polkitAuth) Close() error {
+	if a.dbus != nil && a.dbus.Conn != nil {
+		return a.dbus.Conn.Close()
+	}
+	return nil
+}
+
+type OAuth2Provider interface {
+	AuthKeeper
+	VerifyJWT(ctx context.Context, tokenString string, r *http.Request) (*auth.TokenInfo, error)
+	JwksUri() string
+}
+
+type oauth2Auth struct {
+	oauth   *remoteauth.Oauth2Auth
+	context context.Context
+}
+
+func (a *oauth2Auth) IsReadAuthorized(ctx context.Context) (bool, error) {
+	return a.oauth.IsReadAuthorized(ctx)
+}
+
+func (a *oauth2Auth) IsWriteAuthorized(ctx context.Context) (bool, error) {
+	return a.oauth.IsWriteAuthorized(ctx)
+}
+
+func (a *oauth2Auth) Deauthorize() *godbus.Error {
+	return nil
+}
+
+func (a *oauth2Auth) Close() error {
+	return nil
+}
+
+func (a *oauth2Auth) VerifyJWT(ctx context.Context, tokenString string, r *http.Request) (*auth.TokenInfo, error) {
+	return a.oauth.VerifyJWT(ctx, tokenString, r)
+}
+
+func (a *oauth2Auth) JwksUri() string {
+	return a.oauth.JwksUri
+}
 
 // setup the dbus authorization call back.
-func NewPolkitAuth(dbusName, dbusPath string) (*AuthKeeper, error) {
-	d, err := dbus.SetupDBus(dbusName, dbusPath)
+func NewPolkitAuth(dbusName, dbusPath string, timeout uint32) (AuthKeeper, error) {
+	conn, err := godbus.ConnectSystemBus()
 	if err != nil {
 		return nil, err
 	}
-	return &AuthKeeper{
-		Dbus: d,
+	return &polkitAuth{
+		dbus: &dbus.DbusAuth{
+			Conn:     conn,
+			DbusName: dbusName,
+			DbusPath: dbusPath,
+			Timeout:  timeout,
+		},
 	}, nil
 }
 
 // no auth at all
-func NewNoAuth() (*AuthKeeper, error) {
-	a := new(AuthKeeper)
-	a.ReadAllowed = true
-	a.WriteAllowed = true
-	return a, nil
+func NewNoAuth(readAllowed, writeAllowed bool) (AuthKeeper, error) {
+	return &noAuth{
+		readAllowed:  readAllowed,
+		writeAllowed: writeAllowed,
+	}, nil
 }
 
 // remote auth with oauth2
-func NewOauth(controller string, skipVerify bool) (*AuthKeeper, error) {
+func NewOauth(controller string, skipVerify bool) (AuthKeeper, error) {
 	if !strings.HasPrefix(controller, "http") {
 		controller = "http://" + controller
 	}
-	a := new(AuthKeeper)
 	jwksURI, err := remoteauth.GetJwksURI(controller, skipVerify)
 	if err != nil {
-		return a, err
+		return nil, err
 	}
-	a.context = context.Background()
+	ctx := context.Background()
 
 	override := keyfunc.Override{}
 	if skipVerify {
@@ -92,49 +145,15 @@ func NewOauth(controller string, skipVerify bool) (*AuthKeeper, error) {
 		}
 	}
 
-	keyf, err := keyfunc.NewDefaultOverrideCtx(a.context, []string{jwksURI}, override)
+	keyf, err := keyfunc.NewDefaultOverrideCtx(ctx, []string{jwksURI}, override)
 	if err != nil {
-		return a, err
+		return nil, err
 	}
-	a.Oauth2 = &remoteauth.Oauth2Auth{KeyFunc: keyf}
-	a.Oauth2.JwksUri = jwksURI
-	return a, nil
-}
-
-func (a *AuthKeeper) Close() error {
-	if a.Dbus != nil && a.Dbus.Conn != nil {
-		return a.Dbus.Conn.Close()
-	}
-	return nil
-}
-
-// Delegate methods to Dbus
-
-func (a *AuthKeeper) IsReadAuthorized(ctx context.Context) (bool, error) {
-	switch a.Mode() {
-	case oauth2:
-		return a.Oauth2.IsReadAuthorized(ctx)
-	case polkit:
-		return a.Dbus.IsReadAuthorized(ctx)
-	default:
-		return a.ReadAllowed, nil
-	}
-}
-
-func (a *AuthKeeper) IsWriteAuthorized(ctx context.Context) (bool, error) {
-	switch a.Mode() {
-	case oauth2:
-		return a.Oauth2.IsWriteAuthorized(ctx)
-	case polkit:
-		return a.Dbus.IsWriteAuthorized(ctx)
-	default:
-		return a.WriteAllowed, nil
-	}
-}
-
-func (a *AuthKeeper) Deauthorize() *godbus.Error {
-	if a.Dbus == nil {
-		return nil
-	}
-	return a.Dbus.Deauthorize()
+	return &oauth2Auth{
+		oauth: &remoteauth.Oauth2Auth{
+			KeyFunc: keyf,
+			JwksUri: jwksURI,
+		},
+		context: ctx,
+	}, nil
 }

@@ -27,7 +27,7 @@ type DbusConnection interface {
 type Connection struct {
 	rchannel chan string
 	dbus     DbusConnection
-	auth     *auth.AuthKeeper
+	auth     auth.AuthKeeper
 }
 
 // opens a new user connection to the dbus
@@ -40,7 +40,7 @@ func NewUser(ctx context.Context) (conn *Connection, err error) {
 	}
 	return conn, err
 }
-func NewSystem(ctx context.Context, auth *auth.AuthKeeper) (conn *Connection, err error) {
+func NewSystem(ctx context.Context, auth auth.AuthKeeper) (conn *Connection, err error) {
 	conn = new(Connection)
 	conn.auth = auth
 	conn.rchannel = make(chan string, 1)

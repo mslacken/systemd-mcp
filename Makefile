@@ -74,8 +74,7 @@ install: build policyinstall
 	install -D -m 0755 bin/gatekeeper $(DESTDIR)$(SBINDIR)/gatekeeper
 
 policyinstall:
-	install -D -m 0644 configs/org.opensuse.systemdmcp.policy $(DESTDIR)$(POLKITDIR)/org.opensuse.systemdmcp.policy
-	install -D -m 0644 configs/org.opensuse.systemdmcp.conf   $(DESTDIR)$(DBUSDIR)/org.opensuse.systemdmcp.conf
 	install -D -m 0644 configs/gatekeeper.service $(DESTDIR)$(SYSTEMDDIR)/gatekeeper.service
+	install -D -m 0644 configs/gatekeeper.socket $(DESTDIR)$(SYSTEMDDIR)/gatekeeper.socket
 	install -D -m 0644 configs/com.suse.gatekeeper.policy $(DESTDIR)$(POLKITDIR)/com.suse.gatekeeper.policy
 

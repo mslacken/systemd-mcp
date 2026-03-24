@@ -204,15 +204,14 @@ func TestListUnits(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			auth, _ := auth_pkg.NewNoAuth(true, true)
 			conn := &Connection{
 				dbus: &mockDbusConnection{
 					listUnitsByPatterns: tt.mockListUnits,
 					listUnitFiles:       tt.mockListFiles,
 					getAllProperties:    tt.mockGetProps,
 				},
-				auth: &auth_pkg.AuthKeeper{
-					ReadAllowed: true,
-				},
+				auth: auth,
 			}
 
 			got, nil, err := conn.ListUnits(context.Background(), nil, tt.params)
@@ -318,11 +317,10 @@ func TestChangeUnitState(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			auth, _ := auth_pkg.NewNoAuth(true, true)
 			conn := &Connection{
 				dbus: tt.mockDbus,
-				auth: &auth_pkg.AuthKeeper{
-					WriteAllowed: true,
-				},
+				auth: auth,
 				rchannel: make(chan string, 10),
 			}
 
