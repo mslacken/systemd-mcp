@@ -1,4 +1,6 @@
 #!/usr/bin/bats
+TEST_CONTAINER=${TEST_CONTAINER:-bci-init-build.docker}
+TEST_BINARY=${TEST_BINARY:-/usr/bin/systemd-mcp}
 
 setup_file() {
   export BATS_LIB_PATH=${BATS_LIB_PATH:-/usr/lib}
@@ -15,7 +17,7 @@ setup_file() {
   
   cd ${BATS_TEST_DIRNAME}
   # Rebuild the image to ensure it has the latest changes
-  podman build -t systemd-mcp-bci -f bci-init.docker .
+  podman build -t systemd-mcp-bci -f $TEST_CONTAINER .
   
   podman network create $NETWORK_NAME || {
     echo "# Failed to create network $NETWORK_NAME" >&3
@@ -77,7 +79,7 @@ Description=Systemd MCP Server
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/systemd-mcp --http :8080 --controller ${INTERNAL_CONTROLLER_URL} --cert-file /etc/ssl/certs/server.crt --key-file /etc/ssl/private/server.key --log-json --debug --verbose --skip-tls-verify
+ExecStart=$TEST_BINARY --http :8080 --controller ${INTERNAL_CONTROLLER_URL} --cert-file /etc/ssl/certs/server.crt --key-file /etc/ssl/private/server.key --log-json --debug --verbose --skip-tls-verify
 Restart=always
 
 [Install]
@@ -106,6 +108,7 @@ teardown_file() {
   podman rm -f $KEYCLOAK_CONTAINER || true
   podman network rm $NETWORK_NAME || true
   rm -f ${BATS_TEST_DIRNAME}/systemd-mcp.tar.gz
+  podman image rm $TEST_CONTAINER || true
 }
 
 @test "Unauthorized access should fail" {
