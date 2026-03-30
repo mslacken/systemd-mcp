@@ -54,7 +54,7 @@ type ManPageResult struct {
 func CreateManPageSchema() *jsonschema.Schema {
 	inputSchema, _ := jsonschema.For[GetManPageParams](nil)
 	inputSchema.Properties["limit"].Default = json.RawMessage(`2000`)
-	inputSchema.Properties["section"].Default = json.RawMessage(`"1"`)
+	inputSchema.Properties["section"].Default = json.RawMessage(`1`)
 	return inputSchema
 }
 
