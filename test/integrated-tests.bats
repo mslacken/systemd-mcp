@@ -1,4 +1,6 @@
 #!/usr/bin/bats
+TEST_CONTAINER=${TEST_CONTAINER:-bci-init-build.docker}
+TEST_BINARY=${TEST_BINARY:-systemd-mcp}
 
 setup_file() {
   export INIT_PAYLOAD='{
@@ -20,7 +22,7 @@ setup_file() {
   make dist
   cp systemd-mcp.tar.gz ${BATS_TEST_DIRNAME}
   cd ${BATS_TEST_DIRNAME}
-  podman build -t systemd-mcp-bci -f bci-init.docker .
+  podman build -t systemd-mcp-bci -f $TEST_CONTAINER .
   
   podman run -d --name $CONTAINER_NAME --privileged systemd-mcp-bci
   
@@ -36,15 +38,16 @@ setup_file() {
 
 teardown_file() {
   podman rm -f $CONTAINER_NAME || true
+  podman image rm $TEST_CONTAINER || true
   rm -f ${BATS_TEST_DIRNAME}/systemd-mcp.tar.gz
 }
 
 @test "Run systemd-mcp --noauth without parameter must fail" {
-  run podman run --entrypoint systemd-mcp systemd-mcp-bci --noauth
+  run podman run --entrypoint $TEST_BINARY systemd-mcp-bci --noauth
   [ "$status" -ne 0 ]
 }
 
-@test "check unit state of dummy.service which needs to suceed" {
+@test "check unit state of dummy.service which needs to succeed" {
   # We use the correct noauth parameter here to ensure it succeeds
   # Note: (cat <<EOF ... EOF; sleep 1) is needed to keep stdin open long enough for the server to process and flush output
   run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
@@ -60,7 +63,7 @@ teardown_file() {
   }
 }
 EOF
-sleep 1) | podman exec -i $CONTAINER_NAME systemd-mcp --noauth ThisIsInsecure"
+sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
   [ "$status" -eq 0 ]
   [[ "$output" == *"dummy.service"* ]]
   [[ "$output" == *"running"* ]] || [[ "$output" == *"active"* ]]
@@ -81,7 +84,7 @@ sleep 1) | podman exec -i $CONTAINER_NAME systemd-mcp --noauth ThisIsInsecure"
   }
 }
 EOF
-sleep 1) | podman exec -i --user testuser $CONTAINER_NAME systemd-mcp"
+sleep 1) | podman exec -i --user testuser $CONTAINER_NAME $TEST_BINARY"
   # The exit status might be 0 because the server ran, but the MCP response should be an error
   [[ "$output" == *"wasn't authorized"* ]] || [[ "$output" == *"Authorization denied"* ]] || [[ "$output" == *"authorized externally"* ]]
 }
@@ -101,7 +104,7 @@ sleep 1) | podman exec -i --user testuser $CONTAINER_NAME systemd-mcp"
   }
 }
 EOF
-sleep 1) | podman exec -i $CONTAINER_NAME systemd-mcp --noauth ThisIsInsecure"
+sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
   [ "$status" -eq 0 ]
   # The output should contain something indicating success
   # For restart, it might return \"Finished\" or similar from CheckForRestartReloadRunning
@@ -124,8 +127,48 @@ sleep 1) | podman exec -i $CONTAINER_NAME systemd-mcp --noauth ThisIsInsecure"
   }
 }
 EOF
-sleep 1) | podman exec -i $CONTAINER_NAME systemd-mcp --noauth ThisIsInsecure"
+sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Dummy log line at"* ]]
 }
 
+@test "check log entries of dummy.service using list_log as loguser with noauth" {
+  run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
+{
+  \"jsonrpc\": \"2.0\",
+  \"id\": 2,
+  \"method\": \"tools/call\",
+  \"params\": {
+    \"name\": \"list_log\",
+    \"arguments\": {
+      \"unit\": [\"dum.*\\\\.service\"],
+      \"exact_unit\": false,
+      \"count\": 10
+    }
+  }
+}
+EOF
+sleep 1) | podman exec -i --user loguser $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Dummy log line at"* ]]
+}
+@test "check log entries of dummy.service using list_log as loguser without noauth" {
+  run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
+{
+  \"jsonrpc\": \"2.0\",
+  \"id\": 2,
+  \"method\": \"tools/call\",
+  \"params\": {
+    \"name\": \"list_log\",
+    \"arguments\": {
+      \"unit\": [\"dum.*\\\\.service\"],
+      \"exact_unit\": false,
+      \"count\": 10
+    }
+  }
+}
+EOF
+sleep 1) | podman exec -i --user loguser $CONTAINER_NAME $TEST_BINARY"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Dummy log line at"* ]]
+}

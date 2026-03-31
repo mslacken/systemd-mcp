@@ -139,6 +139,33 @@ func (sj *HostLog) seekByTimeRange(params *ListLogParams) error {
 	return nil
 }
 
+func (sj *HostLog) isJournalGroupMember() bool {
+	info, err := os.Stat("/var/log/journal")
+	if err != nil {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	journalGid := stat.Gid
+
+	if uint32(os.Getgid()) == journalGid {
+		return true
+	}
+
+	groups, err := os.Getgroups()
+	if err != nil {
+		return false
+	}
+	for _, gid := range groups {
+		if uint32(gid) == journalGid {
+			return true
+		}
+	}
+	return false
+}
+
 // this is a very unusual function, as we have two cases here:
 //  1. we run as root and have to asek via ouath2 that we are allowed to
 //     acess the journal
@@ -152,15 +179,8 @@ func (sj *HostLog) seekByTimeRange(params *ListLogParams) error {
 func (sj *HostLog) self_init(ctx context.Context) (allowed bool, err error) {
 	if sj.journal != nil {
 		return sj.Auth.IsReadAuthorized(ctx)
-	}
-
-	allowed, err = sj.Auth.IsReadAuthorized(ctx)
-	if err != nil || !allowed {
-		return allowed, err
-	}
-
-	if os.Geteuid() == 0 {
-		// running as root, ask via oauth2 is read is authorized, if yes
+	} else if os.Geteuid() == 0 || sj.isJournalGroupMember() {
+		// running as root or in journal group, ask via oauth2 is read is authorized, if yes
 		// and journal isn't opened, open it
 		j, err := sdjournal.NewJournal()
 		if err != nil {
@@ -213,6 +233,13 @@ func (sj *HostLog) self_init(ctx context.Context) (allowed bool, err error) {
 			return false, fmt.Errorf("failed to open journal from fd: %w", err)
 		}
 		sj.journal = &j.Journal
+	}
+	// if journal can be read don't do any more auth calling
+	if !sj.isJournalGroupMember() {
+		allowed, err = sj.Auth.IsReadAuthorized(ctx)
+		if err != nil || !allowed {
+			return allowed, err
+		}
 	}
 	return true, nil
 }

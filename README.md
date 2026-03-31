@@ -35,7 +35,7 @@ The `make install` command installs:
 When running over Stdio (default), `systemd-mcp` uses `polkit` for authorization. The process runs as the current user.
 
 *   **Unit Management**: Operations like starting or stopping units trigger a polkit request for `org.freedesktop.systemd1.manage-units`.
-*   **Log Access**: To access system logs without root privileges, `systemd-mcp` connects to the `gatekeeper` via `/run/gatekeeper/gatekeeper.socket`. This triggers a polkit request for `com.suse.gatekeeper.readlog`.
+*   **Log Access**: To access system logs without systemd log privileges, `systemd-mcp` connects to the `gatekeeper` via `/run/gatekeeper/gatekeeper.socket`. This triggers a polkit request for `com.suse.gatekeeper.readlog`. Systemd log privileges are granted if the user is in the same group as the directory `/var/log/journal`. This is behavior is different to behavior of `jouralctl` where an user gets access to his own log files, `systemd-mcp` **always** tries to get access to the system logs.
 
 ## HTTP Transport (OAuth2)
 
