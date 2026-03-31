@@ -132,7 +132,7 @@ sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
   [[ "$output" == *"Dummy log line at"* ]]
 }
 
-@test "check log entries of dummy.service using list_log as loguser" {
+@test "check log entries of dummy.service using list_log as loguser with noauth" {
   run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
 {
   \"jsonrpc\": \"2.0\",
@@ -149,6 +149,26 @@ sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
 }
 EOF
 sleep 1) | podman exec -i --user loguser $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Dummy log line at"* ]]
+}
+@test "check log entries of dummy.service using list_log as loguser without noauth" {
+  run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
+{
+  \"jsonrpc\": \"2.0\",
+  \"id\": 2,
+  \"method\": \"tools/call\",
+  \"params\": {
+    \"name\": \"list_log\",
+    \"arguments\": {
+      \"unit\": [\"dum.*\\\\.service\"],
+      \"exact_unit\": false,
+      \"count\": 10
+    }
+  }
+}
+EOF
+sleep 1) | podman exec -i --user loguser $CONTAINER_NAME $TEST_BINARY"
   [ "$status" -eq 0 ]
   [[ "$output" == *"Dummy log line at"* ]]
 }
