@@ -98,19 +98,18 @@ func (m *mockDbusConnection) DisableUnitFilesContext(ctx context.Context, files 
 	return nil, nil
 }
 
-func TestListUnits(t *testing.T) {
+func TestListLoadedUnits(t *testing.T) {
 	tests := []struct {
 		name          string
-		params        *ListUnitsParams
+		params        *ListLoadedUnitsParams
 		mockListUnits func(patterns []string, states []string) ([]dbus.UnitStatus, error)
-		mockListFiles func() ([]dbus.UnitFile, error)
 		mockGetProps  func(unitName string) (map[string]interface{}, error)
 		want          []mcp.Content
 		wantErr       bool
 	}{
 		{
 			name: "success by name with properties",
-			params: &ListUnitsParams{
+			params: &ListLoadedUnitsParams{
 				Patterns:   []string{"test.service"},
 				Properties: true,
 			},
@@ -129,7 +128,7 @@ func TestListUnits(t *testing.T) {
 		},
 		{
 			name: "success by state without properties",
-			params: &ListUnitsParams{
+			params: &ListLoadedUnitsParams{
 				States: []string{"running"},
 			},
 			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
@@ -144,13 +143,12 @@ func TestListUnits(t *testing.T) {
 		},
 		{
 			name: "no units found",
-			params: &ListUnitsParams{
+			params: &ListLoadedUnitsParams{
 				Patterns: []string{"nonexistent.service"},
 			},
 			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
 				return []dbus.UnitStatus{}, nil
 			},
-			// ListUnits returns empty list now, not error
 			want: []mcp.Content{
 				&mcp.TextContent{Text: "[]"},
 			},
@@ -158,7 +156,7 @@ func TestListUnits(t *testing.T) {
 		},
 		{
 			name: "dbus error on list units",
-			params: &ListUnitsParams{
+			params: &ListLoadedUnitsParams{
 				Patterns: []string{"test.service"},
 			},
 			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
@@ -166,11 +164,51 @@ func TestListUnits(t *testing.T) {
 			},
 			wantErr: true,
 		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth, _ := auth_pkg.NewNoAuth(true, true)
+			conn := &Connection{
+				dbus: &mockDbusConnection{
+					listUnitsByPatterns: tt.mockListUnits,
+					getAllProperties:    tt.mockGetProps,
+				},
+				auth: auth,
+			}
+
+			got, nil, err := conn.ListLoadedUnits(context.Background(), nil, tt.params)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ListLoadedUnits() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr {
+				if len(got.Content) != len(tt.want) {
+					t.Errorf("ListLoadedUnits() got = %v, want %v", got.Content, tt.want)
+					return
+				}
+				for i := range got.Content {
+					gotText := got.Content[i].(*mcp.TextContent).Text
+					wantText := tt.want[i].(*mcp.TextContent).Text
+
+					assert.JSONEq(t, wantText, gotText)
+				}
+			}
+		})
+	}
+}
+
+func TestListUnitFiles(t *testing.T) {
+	tests := []struct {
+		name          string
+		params        *ListUnitFilesParams
+		mockListFiles func() ([]dbus.UnitFile, error)
+		want          []mcp.Content
+		wantErr       bool
+	}{
 		{
 			name: "success list files",
-			params: &ListUnitsParams{
-				Mode: "files",
-			},
+			params: &ListUnitFilesParams{},
 			mockListFiles: func() ([]dbus.UnitFile, error) {
 				return []dbus.UnitFile{{Path: "/etc/systemd/system/test.service", Type: "enabled"}}, nil
 			},
@@ -183,8 +221,7 @@ func TestListUnits(t *testing.T) {
 		},
 		{
 			name: "list files filtered by pattern",
-			params: &ListUnitsParams{
-				Mode:     "files",
+			params: &ListUnitFilesParams{
 				Patterns: []string{"*.service"},
 			},
 			mockListFiles: func() ([]dbus.UnitFile, error) {
@@ -207,21 +244,19 @@ func TestListUnits(t *testing.T) {
 			auth, _ := auth_pkg.NewNoAuth(true, true)
 			conn := &Connection{
 				dbus: &mockDbusConnection{
-					listUnitsByPatterns: tt.mockListUnits,
-					listUnitFiles:       tt.mockListFiles,
-					getAllProperties:    tt.mockGetProps,
+					listUnitFiles: tt.mockListFiles,
 				},
 				auth: auth,
 			}
 
-			got, nil, err := conn.ListUnits(context.Background(), nil, tt.params)
+			got, nil, err := conn.ListUnitFiles(context.Background(), nil, tt.params)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ListUnits() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ListUnitFiles() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if !tt.wantErr {
 				if len(got.Content) != len(tt.want) {
-					t.Errorf("ListUnits() got = %v, want %v", got.Content, tt.want)
+					t.Errorf("ListUnitFiles() got = %v, want %v", got.Content, tt.want)
 					return
 				}
 				for i := range got.Content {
@@ -234,6 +269,7 @@ func TestListUnits(t *testing.T) {
 		})
 	}
 }
+
 
 func TestChangeUnitState(t *testing.T) {
 	tests := []struct {

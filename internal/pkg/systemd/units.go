@@ -17,7 +17,7 @@ import (
 )
 
 func ValidStates() []string {
-	return []string{"active", "dead", "inactive", "loaded", "mounted", "not-found", "plugged", "running", "all"}
+	return []string{"active", "dead", "inactive", "loaded", "mounted", "not-found", "plugged", "running", "all", "failed"}
 }
 
 func ValidUnitFileStates() []string {
@@ -62,29 +62,29 @@ type UnitProperties struct {
 	MemoryCurrent uint64 `json:"MemoryCurrent"`
 }
 
-type ListUnitsParams struct {
-	States     []string `json:"states,omitempty" jsonschema:"List units in these states. For loaded units (mode='loaded'), these are active/load states (e.g. 'running', 'failed'). For unit files (mode='files'), these are enablement states (e.g. 'enabled', 'disabled')."`
+type ListLoadedUnitsParams struct {
+	States     []string `json:"states,omitempty" jsonschema:"List units in these active/load states (e.g. 'running', 'failed')."`
 	Patterns   []string `json:"patterns,omitempty" jsonschema:"List units by their names or patterns (e.g. '*.service')."`
-	Properties bool     `json:"properties,omitempty" jsonschema:"If true, return detailed properties for each unit. Only applies to mode='loaded'."`
+	Properties bool     `json:"properties,omitempty" jsonschema:"If true, return detailed properties for each unit."`
 	Verbose    bool     `json:"verbose,omitempty" jsonschema:"Return more details in the response."`
-	Mode       string   `json:"mode,omitempty" jsonschema:"'loaded' (default) to list loaded units (active/inactive), 'files' to list all installed unit files."`
 }
 
-func CreateListUnitsSchema() *jsonschema.Schema {
-	inputSchema, _ := jsonschema.For[ListUnitsParams](nil)
+func CreateListLoadedUnitsSchema() *jsonschema.Schema {
+	inputSchema, _ := jsonschema.For[ListLoadedUnitsParams](nil)
 	var states []any
 	for _, s := range ValidStates() {
 		states = append(states, s)
 	}
 
-	inputSchema.Properties["mode"].Enum = []any{"loaded", "files"}
-	inputSchema.Properties["mode"].Default = json.RawMessage(`"loaded"`)
+	if inputSchema.Properties["states"].Items != nil {
+		inputSchema.Properties["states"].Items.Enum = states
+	}
 
 	return inputSchema
 }
 
-func (conn *Connection) ListUnits(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitsParams) (*mcp.CallToolResult, any, error) {
-	slog.Debug("ListUnits called", "params", params)
+func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRequest, params *ListLoadedUnitsParams) (*mcp.CallToolResult, any, error) {
+	slog.Debug("ListLoadedUnits called", "params", params)
 	allowed, err := conn.auth.IsReadAuthorized(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -93,35 +93,17 @@ func (conn *Connection) ListUnits(ctx context.Context, req *mcp.CallToolRequest,
 		return nil, nil, fmt.Errorf("calling method was canceled by user")
 	}
 
-	mode := params.Mode
-	if mode == "" {
-		mode = "loaded"
-	}
-
-	if mode == "files" {
-		return conn.listUnitFilesInternal(ctx, params)
-	}
-
-	// Mode "loaded"
 	reqStates := []string{}
 	if len(params.States) > 0 {
 		if slices.Contains(params.States, "all") {
 			reqStates = []string{}
 		} else {
 			reqStates = params.States
-			// Optional: Validate states for loaded mode
+			// Check for valid states although the input schema doesn't allow invalid ones
 			valid := ValidStates()
 			for _, s := range reqStates {
 				if !slices.Contains(valid, s) {
-					// We warn or error?
-					// Let's error to be helpful, unless strict validation is off.
-					// But user might mix up states if they don't know the mode.
-					// Let's be lenient or just filter? The underlying dbus call filters.
-					// If we pass invalid state to dbus, it might fail or return nothing.
-					// Let's check validity.
-					if !slices.Contains(valid, s) {
-						return nil, nil, fmt.Errorf("requested state %s is not a valid state for mode 'loaded'", s)
-					}
+					return nil, nil, fmt.Errorf("requested state %s is not a valid state for loaded units", s)
 				}
 			}
 		}
@@ -200,7 +182,35 @@ func (conn *Connection) ListUnits(ctx context.Context, req *mcp.CallToolRequest,
 	}, nil, nil
 }
 
-func (conn *Connection) listUnitFilesInternal(ctx context.Context, params *ListUnitsParams) (*mcp.CallToolResult, any, error) {
+type ListUnitFilesParams struct {
+	States   []string `json:"states,omitempty" jsonschema:"List unit files in these enablement states (e.g. 'enabled', 'disabled'). If empty all states are listed."`
+	Patterns []string `json:"patterns,omitempty" jsonschema:"List unit files by their names or patterns (e.g. '*.service'). If empty all unit file are listed."`
+}
+
+func CreateListUnitFilesSchema() *jsonschema.Schema {
+	inputSchema, _ := jsonschema.For[ListUnitFilesParams](nil)
+	var states []any
+	for _, s := range ValidUnitFileStates() {
+		states = append(states, s)
+	}
+
+	if inputSchema.Properties["states"].Items != nil {
+		inputSchema.Properties["states"].Items.Enum = states
+	}
+
+	return inputSchema
+}
+
+func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitFilesParams) (*mcp.CallToolResult, any, error) {
+	slog.Debug("ListUnitFiles called", "params", params)
+	allowed, err := conn.auth.IsReadAuthorized(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, fmt.Errorf("calling method was canceled by user")
+	}
+
 	unitList, err := conn.dbus.ListUnitFilesContext(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -252,7 +262,6 @@ func (conn *Connection) listUnitFilesInternal(ctx context.Context, params *ListU
 			Text: string(jsonByte),
 		})
 	}
-
 	if len(txtContentList) == 0 {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: "[]"}},

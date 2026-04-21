@@ -108,7 +108,7 @@ teardown_file() {
   podman rm -f $KEYCLOAK_CONTAINER || true
   podman network rm $NETWORK_NAME || true
   rm -f ${BATS_TEST_DIRNAME}/systemd-mcp.tar.gz
-  podman image rm $TEST_CONTAINER || true
+  podman image rm systemd-mcp-bci || true
 }
 
 @test "Unauthorized access should fail" {
