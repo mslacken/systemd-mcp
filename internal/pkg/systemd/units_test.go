@@ -136,7 +136,23 @@ func TestListLoadedUnits(t *testing.T) {
 			},
 			want: []mcp.Content{
 				&mcp.TextContent{
-					Text: `{"name":"test.service","state":"running","description":"Test Service"}`,
+					Text: `{"state":"running","units":["test.service"]}`,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "success with description",
+			params: &ListLoadedUnitsParams{
+				States:             []string{"running"},
+				IncludeDescription: true,
+			},
+			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
+				return []dbus.UnitStatus{{Name: "test.service", ActiveState: "running", Description: "Test Service"}}, nil
+			},
+			want: []mcp.Content{
+				&mcp.TextContent{
+					Text: `{"state":"running","units":[{"name":"test.service","description":"Test Service"}]}`,
 				},
 			},
 			wantErr: false,
@@ -203,18 +219,19 @@ func TestListUnitFiles(t *testing.T) {
 		name          string
 		params        *ListUnitFilesParams
 		mockListFiles func() ([]dbus.UnitFile, error)
+		mockGetProps  func(unitName string) (map[string]interface{}, error)
 		want          []mcp.Content
 		wantErr       bool
 	}{
 		{
-			name: "success list files",
+			name:   "success list files",
 			params: &ListUnitFilesParams{},
 			mockListFiles: func() ([]dbus.UnitFile, error) {
 				return []dbus.UnitFile{{Path: "/etc/systemd/system/test.service", Type: "enabled"}}, nil
 			},
 			want: []mcp.Content{
 				&mcp.TextContent{
-					Text: `{"name":"test.service","state":"enabled"}`,
+					Text: `{"state":"enabled","units":["test.service"]}`,
 				},
 			},
 			wantErr: false,
@@ -232,7 +249,25 @@ func TestListUnitFiles(t *testing.T) {
 			},
 			want: []mcp.Content{
 				&mcp.TextContent{
-					Text: `{"name":"test.service","state":"enabled"}`,
+					Text: `{"state":"enabled","units":["test.service"]}`,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "success with description",
+			params: &ListUnitFilesParams{
+				IncludeDescription: true,
+			},
+			mockListFiles: func() ([]dbus.UnitFile, error) {
+				return []dbus.UnitFile{{Path: "/etc/systemd/system/test.service", Type: "enabled"}}, nil
+			},
+			mockGetProps: func(unitName string) (map[string]interface{}, error) {
+				return map[string]interface{}{"Description": "Test Service"}, nil
+			},
+			want: []mcp.Content{
+				&mcp.TextContent{
+					Text: `{"state":"enabled","units":[{"name":"test.service","description":"Test Service"}]}`,
 				},
 			},
 			wantErr: false,
@@ -244,7 +279,8 @@ func TestListUnitFiles(t *testing.T) {
 			auth, _ := auth_pkg.NewNoAuth(true, true)
 			conn := &Connection{
 				dbus: &mockDbusConnection{
-					listUnitFiles: tt.mockListFiles,
+					listUnitFiles:    tt.mockListFiles,
+					getAllProperties: tt.mockGetProps,
 				},
 				auth: auth,
 			}

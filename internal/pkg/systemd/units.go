@@ -63,10 +63,11 @@ type UnitProperties struct {
 }
 
 type ListLoadedUnitsParams struct {
-	States     []string `json:"states,omitempty" jsonschema:"List units in these active/load states (e.g. 'running', 'failed')."`
-	Patterns   []string `json:"patterns,omitempty" jsonschema:"List units by their names or patterns (e.g. '*.service')."`
-	Properties bool     `json:"properties,omitempty" jsonschema:"If true, return detailed properties for each unit."`
-	Verbose    bool     `json:"verbose,omitempty" jsonschema:"Return more details in the response."`
+	States             []string `json:"states,omitempty" jsonschema:"List units in these active/load states (e.g. 'running', 'failed')."`
+	Patterns           []string `json:"patterns,omitempty" jsonschema:"List units by their names or patterns (e.g. '*.service')."`
+	Properties         bool     `json:"properties,omitempty" jsonschema:"If true, return detailed properties for each unit."`
+	IncludeDescription bool     `json:"include_description,omitempty" jsonschema:"If true, include the description for each unit."`
+	Verbose            bool     `json:"verbose,omitempty" jsonschema:"Return more details in the response."`
 }
 
 func CreateListLoadedUnitsSchema() *jsonschema.Schema {
@@ -146,25 +147,41 @@ func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRe
 				Text: string(jsonByte),
 			})
 		}
+	} else if params.Verbose {
+		for _, u := range units {
+			jsonByte, _ := json.Marshal(&u)
+			txtContentList = append(txtContentList, &mcp.TextContent{
+				Text: string(jsonByte),
+			})
+		}
 	} else {
-		type LightUnit struct {
-			Name        string `json:"name"`
-			State       string `json:"state"`
-			Description string `json:"description"`
+		groups := make(map[string][]any)
+		for _, u := range units {
+			var unitData any
+			if params.IncludeDescription {
+				unitData = struct {
+					Name        string `json:"name"`
+					Description string `json:"description"`
+				}{Name: u.Name, Description: u.Description}
+			} else {
+				unitData = u.Name
+			}
+			groups[u.ActiveState] = append(groups[u.ActiveState], unitData)
 		}
 
-		for _, u := range units {
-			var jsonByte []byte
-			if params.Verbose {
-				jsonByte, _ = json.Marshal(&u)
-			} else {
-				lightUnit := LightUnit{
-					Name:        u.Name,
-					State:       u.ActiveState,
-					Description: u.Description,
-				}
-				jsonByte, _ = json.Marshal(&lightUnit)
-			}
+		// Sort keys for consistent output
+		states := make([]string, 0, len(groups))
+		for s := range groups {
+			states = append(states, s)
+		}
+		slices.Sort(states)
+
+		for _, state := range states {
+			res := struct {
+				State string `json:"state"`
+				Units any    `json:"units"`
+			}{State: state, Units: groups[state]}
+			jsonByte, _ := json.Marshal(res)
 			txtContentList = append(txtContentList, &mcp.TextContent{
 				Text: string(jsonByte),
 			})
@@ -183,8 +200,9 @@ func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRe
 }
 
 type ListUnitFilesParams struct {
-	States   []string `json:"states,omitempty" jsonschema:"List unit files in these enablement states (e.g. 'enabled', 'disabled'). If empty all states are listed."`
-	Patterns []string `json:"patterns,omitempty" jsonschema:"List unit files by their names or patterns (e.g. '*.service'). If empty all unit file are listed."`
+	States             []string `json:"states,omitempty" jsonschema:"List unit files in these enablement states (e.g. 'enabled', 'disabled'). If empty all states are listed."`
+	Patterns           []string `json:"patterns,omitempty" jsonschema:"List unit files by their names or patterns (e.g. '*.service'). If empty all unit file are listed."`
+	IncludeDescription bool     `json:"include_description,omitempty" jsonschema:"If true, include the description for each unit."`
 }
 
 func CreateListUnitFilesSchema() *jsonschema.Schema {
@@ -222,6 +240,8 @@ func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequ
 	filterStates := len(params.States) > 0 && !slices.Contains(params.States, "all")
 	filterPatterns := len(params.Patterns) > 0
 
+	groups := make(map[string][]any)
+
 	for _, unit := range unitList {
 		name := path.Base(unit.Path)
 		state := unit.Type // In ListUnitFiles, Type corresponds to enablement state
@@ -247,14 +267,38 @@ func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequ
 			}
 		}
 
-		uInfo := struct {
-			Name  string `json:"name"`
-			State string `json:"state"` // changed from Type to State for consistency
-		}{
-			Name:  name,
-			State: state,
+		var unitData any
+		if params.IncludeDescription {
+			description := ""
+			props, err := conn.dbus.GetAllPropertiesContext(ctx, name)
+			if err == nil {
+				if d, ok := props["Description"].(string); ok {
+					description = d
+				}
+			}
+			unitData = struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}{Name: name, Description: description}
+		} else {
+			unitData = name
 		}
-		jsonByte, err := json.Marshal(uInfo)
+		groups[state] = append(groups[state], unitData)
+	}
+
+	// Sort keys for consistent output
+	states := make([]string, 0, len(groups))
+	for s := range groups {
+		states = append(states, s)
+	}
+	slices.Sort(states)
+
+	for _, state := range states {
+		res := struct {
+			State string `json:"state"`
+			Units any    `json:"units"`
+		}{State: state, Units: groups[state]}
+		jsonByte, err := json.Marshal(res)
 		if err != nil {
 			return nil, nil, fmt.Errorf("could not unmarshall result: %w", err)
 		}
@@ -305,17 +349,6 @@ type RestartReloadParams struct {
 }
 
 // return which are define in the upstream documentation as:
-// The mode needs to be one of
-// replace, fail, isolate, ignore-dependencies, ignore-requirements. If
-// "replace" the call will start the unit and its dependencies, possibly
-// replacing already queued jobs that conflict with this. If "fail" the call
-// will start the unit and its dependencies, but will fail if this would change
-// an already queued job. If "isolate" the call will start the unit in question
-// and terminate all units that aren't dependencies of it. If
-// "ignore-dependencies" it will start a unit but ignore all its dependencies.
-// If "ignore-requirements" it will start a unit but only ignore the
-// requirement dependencies. It is not recommended to make use of the latter
-// two options.
 func ValidRestartModes() []string {
 	return []string{"replace", "fail", "isolate", "ignore-dependencies", "ignore-requirements"}
 }
