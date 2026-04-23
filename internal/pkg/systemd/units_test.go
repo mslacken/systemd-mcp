@@ -3,6 +3,7 @@ package systemd
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/coreos/go-systemd/v22/dbus"
@@ -180,6 +181,54 @@ func TestListLoadedUnits(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "unknown state (now allowed)",
+			params: &ListLoadedUnitsParams{
+				States: []string{"unknown_state"},
+			},
+			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
+				if !slices.Contains(states, "unknown_state") {
+					return nil, fmt.Errorf("expected unknown_state in states")
+				}
+				return []dbus.UnitStatus{}, nil
+			},
+			want: []mcp.Content{
+				&mcp.TextContent{Text: "[]"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "multiple states selected",
+			params: &ListLoadedUnitsParams{
+				States: []string{"active", "running", "failed"},
+			},
+			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
+				if len(states) != 3 || states[0] != "active" || states[1] != "running" || states[2] != "failed" {
+					return nil, fmt.Errorf("expected [active running failed], got %v", states)
+				}
+				return []dbus.UnitStatus{}, nil
+			},
+			want: []mcp.Content{
+				&mcp.TextContent{Text: "[]"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "comma separated states",
+			params: &ListLoadedUnitsParams{
+				States: []string{"running,failed"},
+			},
+			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
+				if len(states) != 2 || states[0] != "running" || states[1] != "failed" {
+					return nil, fmt.Errorf("expected [running failed], got %v", states)
+				}
+				return []dbus.UnitStatus{}, nil
+			},
+			want: []mcp.Content{
+				&mcp.TextContent{Text: "[]"},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -269,6 +318,42 @@ func TestListUnitFiles(t *testing.T) {
 				&mcp.TextContent{
 					Text: `{"state":"enabled","units":[{"name":"test.service","description":"Test Service"}]}`,
 				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "list files filtered by multiple states",
+			params: &ListUnitFilesParams{
+				States: []string{"enabled", "disabled"},
+			},
+			mockListFiles: func() ([]dbus.UnitFile, error) {
+				return []dbus.UnitFile{
+					{Path: "/etc/systemd/system/test1.service", Type: "enabled"},
+					{Path: "/etc/systemd/system/test2.service", Type: "disabled"},
+					{Path: "/etc/systemd/system/test3.service", Type: "static"},
+				}, nil
+			},
+			want: []mcp.Content{
+				&mcp.TextContent{Text: `{"state":"disabled","units":["test2.service"]}`},
+				&mcp.TextContent{Text: `{"state":"enabled","units":["test1.service"]}`},
+			},
+			wantErr: false,
+		},
+		{
+			name: "list files filtered by comma separated states",
+			params: &ListUnitFilesParams{
+				States: []string{"enabled,disabled"},
+			},
+			mockListFiles: func() ([]dbus.UnitFile, error) {
+				return []dbus.UnitFile{
+					{Path: "/etc/systemd/system/test1.service", Type: "enabled"},
+					{Path: "/etc/systemd/system/test2.service", Type: "disabled"},
+					{Path: "/etc/systemd/system/test3.service", Type: "static"},
+				}, nil
+			},
+			want: []mcp.Content{
+				&mcp.TextContent{Text: `{"state":"disabled","units":["test2.service"]}`},
+				&mcp.TextContent{Text: `{"state":"enabled","units":["test1.service"]}`},
 			},
 			wantErr: false,
 		},

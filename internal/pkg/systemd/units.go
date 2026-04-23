@@ -78,7 +78,12 @@ func CreateListLoadedUnitsSchema() *jsonschema.Schema {
 	}
 
 	if inputSchema.Properties["states"].Items != nil {
-		inputSchema.Properties["states"].Items.Enum = states
+		inputSchema.Properties["states"].Items = &jsonschema.Schema{
+			AnyOf: []*jsonschema.Schema{
+				{Enum: states},
+				{Type: "string"},
+			},
+		}
 	}
 
 	return inputSchema
@@ -99,12 +104,11 @@ func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRe
 		if slices.Contains(params.States, "all") {
 			reqStates = []string{}
 		} else {
-			reqStates = params.States
-			// Check for valid states although the input schema doesn't allow invalid ones
-			valid := ValidStates()
-			for _, s := range reqStates {
-				if !slices.Contains(valid, s) {
-					return nil, nil, fmt.Errorf("requested state %s is not a valid state for loaded units", s)
+			for _, s := range params.States {
+				if strings.Contains(s, ",") {
+					reqStates = append(reqStates, strings.Split(s, ",")...)
+				} else {
+					reqStates = append(reqStates, s)
 				}
 			}
 		}
@@ -213,7 +217,12 @@ func CreateListUnitFilesSchema() *jsonschema.Schema {
 	}
 
 	if inputSchema.Properties["states"].Items != nil {
-		inputSchema.Properties["states"].Items.Enum = states
+		inputSchema.Properties["states"].Items = &jsonschema.Schema{
+			AnyOf: []*jsonschema.Schema{
+				{Enum: states},
+				{Type: "string"},
+			},
+		}
 	}
 
 	return inputSchema
@@ -236,8 +245,21 @@ func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequ
 
 	txtContentList := []mcp.Content{}
 
+	reqStates := []string{}
+	if len(params.States) > 0 {
+		if !slices.Contains(params.States, "all") {
+			for _, s := range params.States {
+				if strings.Contains(s, ",") {
+					reqStates = append(reqStates, strings.Split(s, ",")...)
+				} else {
+					reqStates = append(reqStates, s)
+				}
+			}
+		}
+	}
+
 	// Prepare filters
-	filterStates := len(params.States) > 0 && !slices.Contains(params.States, "all")
+	filterStates := len(reqStates) > 0
 	filterPatterns := len(params.Patterns) > 0
 
 	groups := make(map[string][]any)
@@ -248,7 +270,7 @@ func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequ
 
 		// Filter by state
 		if filterStates {
-			if !slices.Contains(params.States, state) {
+			if !slices.Contains(reqStates, state) {
 				continue
 			}
 		}
