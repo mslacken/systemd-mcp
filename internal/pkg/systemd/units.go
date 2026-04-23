@@ -17,11 +17,11 @@ import (
 )
 
 func ValidStates() []string {
-	return []string{"active", "dead", "inactive", "loaded", "mounted", "not-found", "plugged", "running", "all", "failed"}
+	return []string{"active", "inactive", "loaded", "not-found", "all", "failed"}
 }
 
 func ValidUnitFileStates() []string {
-	return []string{"enabled", "enabled-runtime", "linked", "linked-runtime", "masked", "masked-runtime", "static", "disabled", "invalid"}
+	return []string{"enabled", "enabled-runtime", "linked", "linked-runtime", "masked", "masked-runtime", "static", "disabled", "invalid", "all"}
 }
 
 type UnitProperties struct {
@@ -63,7 +63,7 @@ type UnitProperties struct {
 }
 
 type ListLoadedUnitsParams struct {
-	States             []string `json:"states,omitempty" jsonschema:"List units in these active/load states (e.g. 'running', 'failed')."`
+	State              string   `json:"state,omitempty" jsonschema:"List units in this active/load state (e.g. 'active', 'failed'). Defaults to 'active'. Use 'all' to list all states. Note: SubStates like 'running', 'dead', 'mounted', 'plugged' are not supported - use the corresponding parent ActiveState instead (e.g., 'active' for running units, 'inactive' for dead units)."`
 	Patterns           []string `json:"patterns,omitempty" jsonschema:"List units by their names or patterns (e.g. '*.service')."`
 	Properties         bool     `json:"properties,omitempty" jsonschema:"If true, return detailed properties for each unit."`
 	IncludeDescription bool     `json:"include_description,omitempty" jsonschema:"If true, include the description for each unit."`
@@ -77,13 +77,9 @@ func CreateListLoadedUnitsSchema() *jsonschema.Schema {
 		states = append(states, s)
 	}
 
-	if inputSchema.Properties["states"].Items != nil {
-		inputSchema.Properties["states"].Items = &jsonschema.Schema{
-			AnyOf: []*jsonschema.Schema{
-				{Enum: states},
-				{Type: "string"},
-			},
-		}
+	if inputSchema.Properties["state"] != nil {
+		inputSchema.Properties["state"].Enum = states
+		inputSchema.Properties["state"].Default = json.RawMessage("\"active\"")
 	}
 
 	return inputSchema
@@ -91,29 +87,22 @@ func CreateListLoadedUnitsSchema() *jsonschema.Schema {
 
 func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRequest, params *ListLoadedUnitsParams) (*mcp.CallToolResult, any, error) {
 	slog.Debug("ListLoadedUnits called", "params", params)
-	allowed, err := conn.auth.IsReadAuthorized(ctx)
-	if err != nil {
+	if allowed, err := conn.auth.IsReadAuthorized(ctx); err != nil {
 		return nil, nil, err
-	}
-	if !allowed {
+	} else if !allowed {
 		return nil, nil, fmt.Errorf("calling method was canceled by user")
 	}
 
-	reqStates := []string{}
-	if len(params.States) > 0 {
-		if slices.Contains(params.States, "all") {
-			reqStates = []string{}
-		} else {
-			for _, s := range params.States {
-				if strings.Contains(s, ",") {
-					reqStates = append(reqStates, strings.Split(s, ",")...)
-				} else {
-					reqStates = append(reqStates, s)
-				}
-			}
-		}
-	} else if len(params.Patterns) == 0 {
-		reqStates = []string{"running"}
+	var reqStates []string
+
+	if params.State == "all" {
+		// List all states
+		reqStates = []string{}
+	} else if params.State != "" {
+		reqStates = []string{params.State}
+	} else {
+		// Default to active units when no state is specified
+		reqStates = []string{"active"}
 	}
 
 	units, err := conn.dbus.ListUnitsByPatternsContext(ctx, reqStates, params.Patterns)
@@ -204,7 +193,7 @@ func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRe
 }
 
 type ListUnitFilesParams struct {
-	States             []string `json:"states,omitempty" jsonschema:"List unit files in these enablement states (e.g. 'enabled', 'disabled'). If empty all states are listed."`
+	State              string   `json:"state,omitempty" jsonschema:"List unit files in this enablement state (e.g. 'enabled', 'disabled'). Defaults to 'enabled'. Use 'all' to list all states."`
 	Patterns           []string `json:"patterns,omitempty" jsonschema:"List unit files by their names or patterns (e.g. '*.service'). If empty all unit file are listed."`
 	IncludeDescription bool     `json:"include_description,omitempty" jsonschema:"If true, include the description for each unit."`
 }
@@ -216,13 +205,9 @@ func CreateListUnitFilesSchema() *jsonschema.Schema {
 		states = append(states, s)
 	}
 
-	if inputSchema.Properties["states"].Items != nil {
-		inputSchema.Properties["states"].Items = &jsonschema.Schema{
-			AnyOf: []*jsonschema.Schema{
-				{Enum: states},
-				{Type: "string"},
-			},
-		}
+	if inputSchema.Properties["state"] != nil {
+		inputSchema.Properties["state"].Enum = states
+		inputSchema.Properties["state"].Default = json.RawMessage("\"enabled\"")
 	}
 
 	return inputSchema
@@ -230,36 +215,18 @@ func CreateListUnitFilesSchema() *jsonschema.Schema {
 
 func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequest, params *ListUnitFilesParams) (*mcp.CallToolResult, any, error) {
 	slog.Debug("ListUnitFiles called", "params", params)
-	allowed, err := conn.auth.IsReadAuthorized(ctx)
-	if err != nil {
+	if allowed, err := conn.auth.IsReadAuthorized(ctx); err != nil {
 		return nil, nil, err
-	}
-	if !allowed {
+	} else if !allowed {
 		return nil, nil, fmt.Errorf("calling method was canceled by user")
 	}
-
 	unitList, err := conn.dbus.ListUnitFilesContext(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	txtContentList := []mcp.Content{}
-
-	reqStates := []string{}
-	if len(params.States) > 0 {
-		if !slices.Contains(params.States, "all") {
-			for _, s := range params.States {
-				if strings.Contains(s, ",") {
-					reqStates = append(reqStates, strings.Split(s, ",")...)
-				} else {
-					reqStates = append(reqStates, s)
-				}
-			}
-		}
-	}
-
 	// Prepare filters
-	filterStates := len(reqStates) > 0
 	filterPatterns := len(params.Patterns) > 0
 
 	groups := make(map[string][]any)
@@ -269,8 +236,13 @@ func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequ
 		state := unit.Type // In ListUnitFiles, Type corresponds to enablement state
 
 		// Filter by state
-		if filterStates {
-			if !slices.Contains(reqStates, state) {
+		filterState := params.State
+		if filterState == "" {
+			// Default to enabled when no state is specified
+			filterState = "enabled"
+		}
+		if filterState != "all" {
+			if filterState != state {
 				continue
 			}
 		}

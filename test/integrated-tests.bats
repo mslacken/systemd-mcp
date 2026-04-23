@@ -80,7 +80,7 @@ sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
   \"params\": {
     \"name\": \"list_loaded_units\",
     \"arguments\": {
-      \"states\": [\"failed\"]
+      \"state\": \"failed\"
     }
   }
 }
@@ -90,6 +90,28 @@ sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
   [[ "$output" == *"failed-dummy.service"* ]]
   [[ "$output" == *"failed"* ]]
 }
+
+@test "check list_loaded_units rejects invalid state" {
+  run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
+{
+  \"jsonrpc\": \"2.0\",
+  \"id\": 2,
+  \"method\": \"tools/call\",
+  \"params\": {
+    \"name\": \"list_loaded_units\",
+    \"arguments\": {
+      \"state\": \"invalid_made_up_state\"
+    }
+  }
+}
+EOF
+sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
+  
+  # When arguments violate JSON schema in MCP, the standard Go SDK implementation returns an error response
+  # Note: It might return exit 0 for the process but contain an error in the JSON response
+  [[ "$output" == *"error"* ]] || [[ "$output" == *"invalid"* ]]
+}
+
 
 @test "check list_unit_files for dummy.service" {
   run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
@@ -123,13 +145,13 @@ sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
   [ "$status" -eq 0 ]
   # Check if tool list_loaded_units exists and has correct schema parts
   [[ "$output" == *"list_loaded_units"* ]]
-  [[ "$output" == *"\"states\""* ]]
+  [[ "$output" == *"\"state\""* ]]
   [[ "$output" == *"\"patterns\""* ]]
   [[ "$output" == *"\"properties\""* ]]
   [[ "$output" == *"\"verbose\""* ]]
-  # Check for some valid states in enum
+  # Check for some valid states in enum (SubStates like 'running' are no longer supported)
   [[ "$output" == *"active"* ]]
-  [[ "$output" == *"running"* ]]
+  [[ "$output" == *"all"* ]]
   [[ "$output" == *"failed"* ]]
 }
 
@@ -145,13 +167,14 @@ sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
   [ "$status" -eq 0 ]
   # Check if tool list_unit_files exists and has correct schema parts
   [[ "$output" == *"list_unit_files"* ]]
-  [[ "$output" == *"\"states\""* ]]
+  [[ "$output" == *"\"state\""* ]]
   [[ "$output" == *"\"patterns\""* ]]
   # Check for some valid enablement states in enum
   [[ "$output" == *"enabled"* ]]
   [[ "$output" == *"disabled"* ]]
   [[ "$output" == *"masked"* ]]
 }
+
 
 @test "restart the dummy unit which must fail as user isn't allowed and testuser can't do it" {
   run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
