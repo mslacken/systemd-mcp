@@ -1,5 +1,11 @@
 package util
 
+import (
+	"encoding/json"
+
+	"github.com/alpkeskin/gotoon"
+)
+
 /*
 cleans a map from emty strng or string slices with length 0
 */
@@ -22,4 +28,26 @@ func ClearMap(in map[string]interface{}) map[string]interface{} {
 		}
 	}
 	return in
+}
+
+// Use a drop in marshaller which outputs toon via gotoon or standard json
+type OutputEncoding struct {
+	useToon bool
+}
+
+func (enc *OutputEncoding) UseToon() {
+	enc.useToon = true
+}
+
+func (enc *OutputEncoding) IsToon() bool {
+	return enc.useToon
+}
+
+func (enc OutputEncoding) Encode(input any) (out []byte, err error) {
+	if enc.useToon {
+		outStr, err := gotoon.Encode(input)
+		return []byte(outStr), err
+	} else {
+		return json.Marshal(input)
+	}
 }

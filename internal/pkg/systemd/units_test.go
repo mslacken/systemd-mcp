@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/alpkeskin/gotoon"
 	"github.com/coreos/go-systemd/v22/dbus"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	auth_pkg "github.com/openSUSE/systemd-mcp/authkeeper"
@@ -104,6 +105,7 @@ func TestListLoadedUnits(t *testing.T) {
 		params        *ListLoadedUnitsParams
 		mockListUnits func(patterns []string, states []string) ([]dbus.UnitStatus, error)
 		mockGetProps  func(unitName string) (map[string]interface{}, error)
+		useToon       bool
 		want          []mcp.Content
 		wantErr       bool
 	}{
@@ -180,6 +182,54 @@ func TestListLoadedUnits(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "success with toon encoding enabled",
+			params: &ListLoadedUnitsParams{
+				State: "running",
+			},
+			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
+				return []dbus.UnitStatus{{Name: "test.service", ActiveState: "running", Description: "Test Service"}}, nil
+			},
+			useToon: true,
+			want: []mcp.Content{
+				&mcp.TextContent{
+					Text: func() string {
+						res := struct {
+							State string   `json:"state"`
+							Units []string `json:"units"`
+						}{State: "running", Units: []string{"test.service"}}
+						out, _ := gotoon.Encode(res)
+						return out
+					}(),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "success with properties and toon encoding enabled",
+			params: &ListLoadedUnitsParams{
+				Patterns:   []string{"test.service"},
+				Properties: true,
+				Verbose:    true,
+			},
+			mockListUnits: func(patterns []string, states []string) ([]dbus.UnitStatus, error) {
+				return []dbus.UnitStatus{{Name: "test.service"}}, nil
+			},
+			mockGetProps: func(unitName string) (map[string]interface{}, error) {
+				return map[string]interface{}{"Id": unitName}, nil
+			},
+			useToon: true,
+			want: []mcp.Content{
+				&mcp.TextContent{
+					Text: func() string {
+						props := map[string]interface{}{"Id": "test.service"}
+						out, _ := gotoon.Encode(&props)
+						return out
+					}(),
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -191,6 +241,9 @@ func TestListLoadedUnits(t *testing.T) {
 					getAllProperties:    tt.mockGetProps,
 				},
 				auth: auth,
+			}
+			if tt.useToon {
+				conn.Encoder.UseToon()
 			}
 
 			got, nil, err := conn.ListLoadedUnits(context.Background(), nil, tt.params)
@@ -207,7 +260,11 @@ func TestListLoadedUnits(t *testing.T) {
 					gotText := got.Content[i].(*mcp.TextContent).Text
 					wantText := tt.want[i].(*mcp.TextContent).Text
 
-					assert.JSONEq(t, wantText, gotText)
+					if tt.useToon {
+						assert.Equal(t, wantText, gotText)
+					} else {
+						assert.JSONEq(t, wantText, gotText)
+					}
 				}
 			}
 		})

@@ -38,12 +38,14 @@ const (
 //go:embed VERSION
 var version string
 
+var useToon bool
+
 func systemdScopes() []string {
 	return []string{"mcp:read"}
 }
 
 func NewRootCmd() *cobra.Command {
-	var rootCmd = &cobra.Command{
+	rootCmd := &cobra.Command{
 		Use:     "systemd-mcp",
 		Short:   "Systemd MCP server",
 		Version: strings.TrimSpace(version),
@@ -63,7 +65,7 @@ func NewRootCmd() *cobra.Command {
 			var logger *slog.Logger
 			logOutput := os.Stderr
 			if viper.GetString("logfile") != "" {
-				f, err := os.OpenFile(viper.GetString("logfile"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0666)
+				f, err := os.OpenFile(viper.GetString("logfile"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o666)
 				if err != nil {
 					return fmt.Errorf("failed to open log file: %w", err)
 				}
@@ -118,6 +120,8 @@ func NewRootCmd() *cobra.Command {
 			systemConn, err := systemd.NewSystem(context.Background(), authorization)
 			if err != nil {
 				slog.Warn("couldn't add systemd tools", slog.Any("error", err))
+			} else if systemConn != nil && useToon {
+				systemConn.Encoder.UseToon()
 			}
 
 			tools := []struct {
@@ -127,7 +131,8 @@ func NewRootCmd() *cobra.Command {
 
 			if systemConn != nil {
 				defer systemConn.Close()
-				tools = append(tools,
+				tools = append(
+					tools,
 					struct {
 						Tool     *mcp.Tool
 						Register func(server *mcp.Server, tool *mcp.Tool)
@@ -228,24 +233,25 @@ func NewRootCmd() *cobra.Command {
 				})
 			}
 			if man.IsManAvailable() {
-				tools = append(tools, struct {
-					Tool     *mcp.Tool
-					Register func(server *mcp.Server, tool *mcp.Tool)
-				}{
-					Tool: &mcp.Tool{
-						Title:       "Display man page",
-						Name:        "get_man_page",
-						Description: "Retrieve a man page. Supports filtering by section and chapters, and pagination.",
-						InputSchema: man.CreateManPageSchema(),
+				tools = append(
+					tools, struct {
+						Tool     *mcp.Tool
+						Register func(server *mcp.Server, tool *mcp.Tool)
+					}{
+						Tool: &mcp.Tool{
+							Title:       "Display man page",
+							Name:        "get_man_page",
+							Description: "Retrieve a man page. Supports filtering by section and chapters, and pagination.",
+							InputSchema: man.CreateManPageSchema(),
+						},
+						Register: func(server *mcp.Server, tool *mcp.Tool) {
+							mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *man.GetManPageParams) (*mcp.CallToolResult, any, error) {
+								slog.Debug("get_man_page called", "args", args)
+								res, out, err := man.GetManPage(ctx, req, args)
+								return res, out, err
+							})
+						},
 					},
-					Register: func(server *mcp.Server, tool *mcp.Tool) {
-						mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *man.GetManPageParams) (*mcp.CallToolResult, any, error) {
-							slog.Debug("get_man_page called", "args", args)
-							res, out, err := man.GetManPage(ctx, req, args)
-							return res, out, err
-						})
-					},
-				},
 				)
 			} else {
 				slog.Debug("man binary not found in PATH, skipping get_man_page tool")
@@ -370,6 +376,7 @@ func NewRootCmd() *cobra.Command {
 
 	rootCmd.Flags().String("http", "", "if set, use streamable HTTP at this address, instead of stdin/stdout")
 	rootCmd.Flags().Bool("skip-tls-verify", false, "Skip TLS certificate verification for outbound requests (e.g. to OAuth2 controller)")
+	rootCmd.Flags().BoolVar(&useToon, "toon", false, "use token optimized object notation")
 	rootCmd.Flags().String("logfile", "", "if set, log to this file instead of stderr")
 	rootCmd.Flags().String("controller", "", "oauth2 controller address")
 	rootCmd.Flags().BoolP("verbose", "v", false, "Enable verbose logging")

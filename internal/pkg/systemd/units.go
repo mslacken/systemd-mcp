@@ -123,7 +123,7 @@ func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRe
 
 			var jsonByte []byte
 			if params.Verbose {
-				jsonByte, err = json.Marshal(&props)
+				jsonByte, err = conn.Encoder.Encode(&props)
 			} else {
 				prop := UnitProperties{}
 				tmp, _ := json.Marshal(props)
@@ -131,7 +131,7 @@ func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRe
 					slog.Warn("failed to unmarshal properties", "unit", u.Name, "error", err)
 					continue
 				}
-				jsonByte, err = json.Marshal(&prop)
+				jsonByte, err = conn.Encoder.Encode(&prop)
 			}
 			if err != nil {
 				return nil, nil, err
@@ -142,7 +142,10 @@ func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRe
 		}
 	} else if params.Verbose {
 		for _, u := range units {
-			jsonByte, _ := json.Marshal(&u)
+			jsonByte, err := conn.Encoder.Encode(&u)
+			if err != nil {
+				return nil, nil, err
+			}
 			txtContentList = append(txtContentList, &mcp.TextContent{
 				Text: string(jsonByte),
 			})
@@ -174,7 +177,10 @@ func (conn *Connection) ListLoadedUnits(ctx context.Context, req *mcp.CallToolRe
 				State string `json:"state"`
 				Units any    `json:"units"`
 			}{State: state, Units: groups[state]}
-			jsonByte, _ := json.Marshal(res)
+			jsonByte, err := conn.Encoder.Encode(res)
+			if err != nil {
+				return nil, nil, err
+			}
 			txtContentList = append(txtContentList, &mcp.TextContent{
 				Text: string(jsonByte),
 			})
@@ -416,6 +422,7 @@ type ChangeUnitStateParams struct {
 func ValidChanges() []string {
 	return []string{"restart", "restart_force", "start", "stop", "stop_kill", "reload", "enable", "enable_force", "disable"}
 }
+
 func ValidModes() []string {
 	return []string{"replace", "fail", "isolate", "ignore-dependencies", "ignore-requirements"}
 }
