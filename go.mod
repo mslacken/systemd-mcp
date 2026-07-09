@@ -19,6 +19,7 @@ require (
 
 require (
 	github.com/MicahParks/jwkset v0.11.0 // indirect
+	github.com/alpkeskin/gotoon v0.1.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect

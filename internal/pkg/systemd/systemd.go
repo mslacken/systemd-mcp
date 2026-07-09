@@ -5,6 +5,7 @@ import (
 
 	"github.com/coreos/go-systemd/v22/dbus"
 	auth "github.com/openSUSE/systemd-mcp/authkeeper"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
 )
 
 // DbusConnection is an interface that abstracts the dbus connection.
@@ -28,6 +29,7 @@ type Connection struct {
 	rchannel chan string
 	dbus     DbusConnection
 	auth     auth.AuthKeeper
+	Encoder  util.OutputEncoding
 }
 
 // opens a new user connection to the dbus
