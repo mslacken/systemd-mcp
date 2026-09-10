@@ -1,8 +1,13 @@
 package man
 
 import (
+	"context"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
 )
 
 func TestStripOverstrike(t *testing.T) {
@@ -141,5 +146,29 @@ func TestGetManPageValidation(t *testing.T) {
 				t.Errorf("GetManPage() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestHostManToonSerialization(t *testing.T) {
+	if !IsManAvailable() {
+		t.Skip("man binary not found in PATH")
+	}
+
+	params := &GetManPageParams{Name: "ls"}
+	var enc util.OutputEncoding
+	enc.UseToon()
+
+	hm := &HostMan{
+		Encoder: enc,
+	}
+
+	res, _, err := hm.GetManPage(context.Background(), nil, params)
+	if err != nil {
+		t.Fatalf("Failed to get man page: %v", err)
+	}
+
+	tc := res.Content[0].(*mcp.TextContent)
+	if !strings.Contains(tc.Text, "content") {
+		t.Errorf("Expected Toon string to contain content field, got: %s", tc.Text)
 	}
 }

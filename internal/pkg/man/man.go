@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
 )
 
 type GetManPageParams struct {
@@ -168,7 +169,16 @@ func IsManAvailable() bool {
 	return err == nil
 }
 
+type HostMan struct {
+	Encoder util.OutputEncoding
+}
+
 func GetManPage(ctx context.Context, req *mcp.CallToolRequest, params *GetManPageParams) (*mcp.CallToolResult, any, error) {
+	hm := &HostMan{}
+	return hm.GetManPage(ctx, req, params)
+}
+
+func (hm *HostMan) GetManPage(ctx context.Context, req *mcp.CallToolRequest, params *GetManPageParams) (*mcp.CallToolResult, any, error) {
 	if params.Name == "" {
 		return nil, nil, fmt.Errorf("man page name is required")
 	}
@@ -222,7 +232,7 @@ func GetManPage(ctx context.Context, req *mcp.CallToolRequest, params *GetManPag
 
 	res := parseAndFilterManPage(cleanOutput, params)
 
-	jsonBytes, err := json.Marshal(res)
+	jsonBytes, err := hm.Encoder.Encode(res)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to marshal response: %w", err)
 	}

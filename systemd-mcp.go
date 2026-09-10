@@ -23,6 +23,7 @@ import (
 	"github.com/openSUSE/systemd-mcp/internal/pkg/journal"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/man"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/systemd"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
 	"github.com/openSUSE/systemd-mcp/remoteauth"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -190,9 +191,23 @@ func NewRootCmd() *cobra.Command {
 					},
 				)
 			}
-			syslog := journal.HostLog{
-				Auth: authorization,
+			var enc util.OutputEncoding
+			if useToon {
+				enc.UseToon()
 			}
+
+			syslog := journal.HostLog{
+				Auth:    authorization,
+				Encoder: enc,
+			}
+			hostFile := file.HostFile{
+				Auth:    authorization,
+				Encoder: enc,
+			}
+			hostMan := man.HostMan{
+				Encoder: enc,
+			}
+
 			if err != nil {
 				slog.Warn("couldn't open log, not adding journal tool", slog.Any("error", err))
 			} else {
@@ -226,7 +241,7 @@ func NewRootCmd() *cobra.Command {
 					Register: func(server *mcp.Server, tool *mcp.Tool) {
 						mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *file.GetFileParams) (*mcp.CallToolResult, any, error) {
 							slog.Debug("get_file called", "args", args)
-							res, out, err := file.GetFile(ctx, req, args, authorization)
+							res, out, err := hostFile.GetFile(ctx, req, args)
 							return res, out, err
 						})
 					},
@@ -247,7 +262,7 @@ func NewRootCmd() *cobra.Command {
 						Register: func(server *mcp.Server, tool *mcp.Tool) {
 							mcp.AddTool(server, tool, func(ctx context.Context, req *mcp.CallToolRequest, args *man.GetManPageParams) (*mcp.CallToolResult, any, error) {
 								slog.Debug("get_man_page called", "args", args)
-								res, out, err := man.GetManPage(ctx, req, args)
+								res, out, err := hostMan.GetManPage(ctx, req, args)
 								return res, out, err
 							})
 						},

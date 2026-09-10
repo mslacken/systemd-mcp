@@ -298,9 +298,9 @@ func (conn *Connection) ListUnitFiles(ctx context.Context, req *mcp.CallToolRequ
 			State string `json:"state"`
 			Units any    `json:"units"`
 		}{State: state, Units: groups[state]}
-		jsonByte, err := json.Marshal(res)
+		jsonByte, err := conn.Encoder.Encode(res)
 		if err != nil {
-			return nil, nil, fmt.Errorf("could not unmarshall result: %w", err)
+			return nil, nil, fmt.Errorf("could not encode result: %w", err)
 		}
 		txtContentList = append(txtContentList, &mcp.TextContent{
 			Text: string(jsonByte),
@@ -506,7 +506,7 @@ func (conn *Connection) ChangeUnitState(ctx context.Context, req *mcp.CallToolRe
 				Filename    string `json:"filename"`
 				Destination string `json:"destination"`
 			}{Type: res.Type, Filename: res.Filename, Destination: res.Destination}
-			jsonByte, _ := json.Marshal(resJson)
+			jsonByte, _ := conn.Encoder.Encode(resJson)
 			txtContentList = append(txtContentList, &mcp.TextContent{Text: string(jsonByte)})
 		}
 		return &mcp.CallToolResult{Content: txtContentList}, nil, nil
@@ -529,7 +529,7 @@ func (conn *Connection) ChangeUnitState(ctx context.Context, req *mcp.CallToolRe
 				Filename    string `json:"filename"`
 				Destination string `json:"destination"`
 			}{Type: res.Type, Filename: res.Filename, Destination: res.Destination}
-			jsonByte, _ := json.Marshal(resJson)
+			jsonByte, _ := conn.Encoder.Encode(resJson)
 			txtContentList = append(txtContentList, &mcp.TextContent{Text: string(jsonByte)})
 		}
 		return &mcp.CallToolResult{Content: txtContentList}, nil, nil

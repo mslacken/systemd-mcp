@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
 )
 
 type GetFileParams struct {
@@ -94,9 +95,21 @@ func getFileMetadata(ctx context.Context, path string, info os.FileInfo, fetchAC
 	return metadata
 }
 
+type HostFile struct {
+	Auth    auth.AuthKeeper
+	Encoder util.OutputEncoding
+}
+
 // reads a file with the privileges of the systemd service
 func GetFile(ctx context.Context, req *mcp.CallToolRequest, params *GetFileParams, authKeeper auth.AuthKeeper) (*mcp.CallToolResult, any, error) {
-	if allowed, err := authKeeper.IsReadAuthorized(ctx); err != nil {
+	hf := &HostFile{
+		Auth: authKeeper,
+	}
+	return hf.GetFile(ctx, req, params)
+}
+
+func (hf *HostFile) GetFile(ctx context.Context, req *mcp.CallToolRequest, params *GetFileParams) (*mcp.CallToolResult, any, error) {
+	if allowed, err := hf.Auth.IsReadAuthorized(ctx); err != nil {
 		return nil, nil, err
 	} else if !allowed {
 		return nil, nil, fmt.Errorf("calling method was canceled by user")
@@ -174,7 +187,7 @@ func GetFile(ctx context.Context, req *mcp.CallToolRequest, params *GetFileParam
 		result.Limit = limit
 	}
 
-	jsonBytes, err := json.Marshal(result)
+	jsonBytes, err := hf.Encoder.Encode(result)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to marshal response: %w", err)
 	}

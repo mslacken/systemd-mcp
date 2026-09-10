@@ -10,6 +10,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openSUSE/systemd-mcp/authkeeper"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -73,5 +74,27 @@ func TestGetFile_Unit(t *testing.T) {
 		}
 		_, _, err := GetFile(context.Background(), nil, params, testAuth)
 		assert.Error(t, err)
+	})
+
+	t.Run("Toon Serialization", func(t *testing.T) {
+		params := &GetFileParams{
+			Path:        testFilePath,
+			ShowContent: true,
+		}
+		var enc util.OutputEncoding
+		enc.UseToon()
+
+		hf := &HostFile{
+			Auth:    testAuth,
+			Encoder: enc,
+		}
+		res, _, err := hf.GetFile(context.Background(), nil, params)
+		assert.NoError(t, err)
+		assert.NotNil(t, res)
+
+		tc := res.Content[0].(*mcp.TextContent)
+		
+		// Toon output should start with standard Toon representation characters
+		assert.True(t, strings.Contains(tc.Text, "metadata"))
 	})
 }

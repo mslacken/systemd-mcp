@@ -22,11 +22,13 @@ import (
 	auth "github.com/openSUSE/systemd-mcp/authkeeper"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/man"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/sdjournalw"
+	"github.com/openSUSE/systemd-mcp/internal/pkg/util"
 )
 
 type HostLog struct {
 	journal *sdjournal.Journal
 	Auth    auth.AuthKeeper
+	Encoder util.OutputEncoding
 }
 
 // Close the log and underlying journal
@@ -533,7 +535,7 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		}
 	}
 
-	jsonBytes, err := json.Marshal(res)
+	jsonBytes, err := sj.Encoder.Encode(res)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to marshal response: %w", err)
 	}
