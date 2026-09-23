@@ -42,6 +42,21 @@ func (a *noAuth) Close() error {
 	return nil
 }
 
+// AuthKeeper if connected as local user, always return true as we can't
+// read more out than any systemctl call
+type localReadAuth struct {
+	AuthKeeper
+}
+
+func (a *localReadAuth) IsReadAuthorized(ctx context.Context) (bool, error) {
+	return true, nil
+}
+
+// create a local AuthKeeper
+func NewLocalReadAuth(inner AuthKeeper) AuthKeeper {
+	return &localReadAuth{AuthKeeper: inner}
+}
+
 type polkitAuth struct {
 	dbus *dbus.DbusAuth
 }

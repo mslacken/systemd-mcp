@@ -108,6 +108,12 @@ func NewRootCmd() *cobra.Command {
 			}
 			defer authorization.Close()
 
+			if !isHttp {
+				// over stdio the calling user runs the server itself, so reads
+				// are always authorized and only writes are still gated
+				authorization = authkeeper.NewLocalReadAuth(authorization)
+			}
+
 			server := mcp.NewServer(&mcp.Implementation{
 				Name:    "Systemd connection",
 				Version: strings.TrimSpace(version),
