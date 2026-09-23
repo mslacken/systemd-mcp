@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,11 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
+// polkit only knows the actions which are installed in
+// /usr/share/polkit-1/actions, so an action of a package which isn't installed
+// can neither be granted nor denied
+var ErrActionNotRegistered = errors.New("polkit action is not registered")
+
 type DbusAuth struct {
 	*dbus.Conn
 	sender   dbus.Sender // store the sender which authorized the last call
@@ -24,7 +30,7 @@ type DbusAuth struct {
 }
 
 // Just register the sender for further call backs
-func (a *DbusAuth) AuthRegister(sender dbus.Sender) *dbus.Error {
+func (a *DbusAuth) AuthRegister(sender dbus.Sender) error {
 	a.sender = sender
 	return nil
 }
@@ -60,7 +66,7 @@ func (a *DbusAuth) Deauthorize() *dbus.Error {
 
 // Check if read was authorized. Triggers also a call back via
 // dbus if read was authorized at another time
-func (a *DbusAuth) IsReadAuthorized(ctx context.Context) (bool, error) {
+func (a *DbusAuth) IsReadAuthorized(ctx context.Context) (authorized bool, err error) {
 	slog.Debug("checking read auth", "address", a.sender)
 
 	readPermission, _ := ctx.Value(PermissionKey).(string)
@@ -71,25 +77,22 @@ func (a *DbusAuth) IsReadAuthorized(ctx context.Context) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(a.Timeout)*time.Second)
 	defer cancel()
 
-	var state bool
-	var err error
-
 	if a.sender == "" {
 		if os.Geteuid() == 0 {
-			state = true
+			return true, nil
 		} else {
-			state, err = CheckPolkitByPID(int32(os.Getpid()), readPermission)
+			authorized, err = CheckPolkitByPID(int32(os.Getpid()), readPermission)
+			if err != nil {
+				return false, err
+			}
 		}
-	}
-	if err != nil {
-		return false, err
 	}
 
 	select {
 	case <-ctx.Done():
 		return false, fmt.Errorf("read authorization timed out: %w", ctx.Err())
 	default:
-		return state, nil
+		return authorized, nil
 	}
 }
 
@@ -206,6 +209,9 @@ func CheckPolkitByPID(pid int32, actionID string) (bool, error) {
 		subject, actionID, details, flags, cancellationID).Store(&result)
 
 	if err != nil {
+		if strings.Contains(err.Error(), "is not registered") {
+			return false, fmt.Errorf("%w: %s", ErrActionNotRegistered, actionID)
+		}
 		return false, fmt.Errorf("error checking authorization: %w", err)
 	}
 
