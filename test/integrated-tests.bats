@@ -239,6 +239,32 @@ sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
   [[ "$output" == *"Dummy log line at"* ]]
 }
 
+@test "list_log with only a to time set (no from) must still return entries" {
+  # Regression from commit 31c56c7: when only `to` was set and `from` was
+  # unset, ListLog broke out of the read loop immediately and returned zero
+  # entries. A far-future `to` behaves like seeking to the tail, so the
+  # newest dummy.log lines must be returned.
+  run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
+{
+  \"jsonrpc\": \"2.0\",
+  \"id\": 2,
+  \"method\": \"tools/call\",
+  \"params\": {
+    \"name\": \"list_log\",
+    \"arguments\": {
+      \"unit\": [\"dum.*\\\\.service\"],
+      \"exact_unit\": false,
+      \"count\": 10,
+      \"to\": \"2999-01-01T00:00:00Z\"
+    }
+  }
+}
+EOF
+sleep 1) | podman exec -i $CONTAINER_NAME $TEST_BINARY --noauth ThisIsInsecure"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Dummy log line at"* ]]
+}
+
 @test "check log entries of dummy.service using list_log as loguser with noauth" {
   run bash -c "(echo -e \"\$INIT_PAYLOAD\"; cat <<'EOF'
 {

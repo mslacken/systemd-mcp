@@ -114,44 +114,52 @@ func (sj *HostLog) seekAndSkip(count uint64, offset uint64) (uint64, error) {
 	}
 }
 
-func (sj *HostLog) seekByTimeRange(params *ListLogParams) error {
-	var fromTime, toTime time.Time
-	// var err error
-
-	if !params.From.IsZero() {
-		fromTime = params.From
-	}
-
-	if !params.To.IsZero() {
-		toTime = params.To
-	}
-
+// position the read cursor before the first entry to be read when listing
+// the newest entries of a time range. A seek leaves the cursor between two
+// entries, so the first Previous/Next call after it is mandatory before any
+// Get* call may be used.
+func (sj *HostLog) seekByTimeRange(count uint64, offset uint64, from time.Time, to time.Time) (uint64, error) {
 	// Validate time range
-	if !params.From.IsZero() && !params.To.IsZero() {
-		if fromTime.After(toTime) {
-			return fmt.Errorf("from time cannot be after to time")
+	if !from.IsZero() && !to.IsZero() {
+		if from.After(to) {
+			return 0, fmt.Errorf("from time cannot be after to time")
 		}
 	}
 
-	if !params.To.IsZero() {
-		toMicros := uint64(toTime.UnixNano() / 1000)
+	if !to.IsZero() {
+		toMicros := uint64(to.UnixNano() / 1000)
 		if err := sj.journal.SeekRealtimeUsec(toMicros); err != nil {
-			return fmt.Errorf("failed to seek to time range: %w", err)
+			return 0, fmt.Errorf("failed to seek to time range: %w", err)
 		}
 	} else {
 		if err := sj.journal.SeekTail(); err != nil {
-			return fmt.Errorf("failed to seek to end: %w", err)
+			return 0, fmt.Errorf("failed to seek to end: %w", err)
 		}
 	}
 
-	// If we have pagination offset, apply it after time seeking
-	if params.Offset > 0 {
-		if _, err := sj.journal.PreviousSkip(uint64(params.Offset)); err != nil {
-			return fmt.Errorf("failed to skip offset entries: %w", err)
+	// move to the newest entry of the range
+	if n, err := sj.journal.Previous(); err != nil {
+		return 0, fmt.Errorf("failed to position on newest entry: %w", err)
+	} else if n == 0 {
+		return 0, nil
+	}
+
+	// Skip offset entries first
+	if offset > 0 {
+		if n, err := sj.journal.PreviousSkip(offset); err != nil {
+			return 0, fmt.Errorf("failed to skip offset entries: %w", err)
+		} else if n == 0 {
+			return 0, nil
 		}
 	}
 
-	return nil
+	if n, err := sj.journal.PreviousSkip(count); err != nil {
+		return 0, fmt.Errorf("failed to move back entries: %w", err)
+	} else if n == 0 {
+		return 0, nil
+	}
+
+	return count, nil
 }
 
 func (sj *HostLog) isJournalGroupMember() bool {
@@ -410,10 +418,19 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 	}
 
 	// Handle time-based filtering
+	maxCount := params.Count
+	if maxCount <= 0 {
+		maxCount = 100
+	}
 	if !params.From.IsZero() || !params.To.IsZero() {
-		err = sj.seekByTimeRange(params)
+		nrEntries, err := sj.seekByTimeRange(uint64(maxCount), uint64(params.Offset), params.From, params.To)
 		if err != nil {
 			return nil, nil, err
+		}
+		if nrEntries == 0 {
+			// no entry in the range, the read head isn't on an entry so don't read one
+			host, _ := os.Hostname()
+			return logResult(ListLogResult{Host: host, Hint: sj.accessHint()})
 		}
 	} else {
 		// Use original pagination logic when no time filters
@@ -446,10 +463,6 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 	}
 
 	collectedCount := 0
-	maxCount := params.Count
-	if maxCount <= 0 {
-		maxCount = 100
-	}
 
 	for {
 		entry, err := sj.journal.GetEntry()
@@ -459,35 +472,19 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 
 		timestamp := time.Unix(0, int64(entry.RealtimeTimestamp)*int64(time.Microsecond))
 
-		if !params.To.IsZero() && timestamp.Before(params.To) {
-
-			ret, err := sj.journal.Next()
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
-			}
-			if ret == 0 {
-				break
-			}
-			continue
-		}
-
-		if !params.From.IsZero() && timestamp.After(params.From) {
-			ret, err := sj.journal.Next()
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to read next entry: %w", err)
-			}
-			if ret == 0 {
-				break
-			}
-			continue
+		// we scan forward from the newest entry of the range, so once we run
+		// into an entry older than the start of the range the scan is done
+		if !params.From.IsZero() && timestamp.Before(params.From) {
+			break
 		}
 
 		if regexPattern != nil {
-			var messages strings.Builder
+			var allFields strings.Builder
 			for _, v := range entry.Fields {
-				messages.WriteString(v)
+				allFields.WriteString(v)
 			}
-			if !regexPattern.MatchString(messages.String()) {
+			if !regexPattern.MatchString(allFields.String()) {
+				// not collected, keep the same budget of entries to scan
 				ret, err := sj.journal.Next()
 				if err != nil {
 					return nil, nil, fmt.Errorf("failed to read next entry: %w", err)

@@ -82,6 +82,16 @@ func NewRootCmd() *cobra.Command {
 			slog.SetDefault(logger)
 			slog.Debug("Logger initialized", "level", logLevel)
 
+			if exe, err := os.Executable(); err == nil {
+				if cwd, err := os.Getwd(); err == nil {
+					slog.Info("starting systemd-mcp",
+						"version", strings.TrimSpace(version),
+						"args", os.Args,
+						"path", exe,
+						"cwd", cwd)
+				}
+			}
+
 			var authorization authkeeper.AuthKeeper
 			var err error
 
