@@ -35,7 +35,12 @@ The `make install` command installs:
 When running over Stdio (default), `systemd-mcp` uses `polkit` for authorization. The process runs as the current user.
 
 *   **Unit Management**: Operations like starting or stopping units trigger a polkit request for `org.freedesktop.systemd1.manage-units`.
-*   **Log Access**: To access system logs without systemd log privileges, `systemd-mcp` connects to the `gatekeeper` via `/run/gatekeeper/gatekeeper.socket`. This triggers a polkit request for `com.suse.gatekeeper.readlog`. Systemd log privileges are granted if the user is in the same group as the directory `/var/log/journal`. This is behavior is different to behavior of `jouralctl` where an user gets access to his own log files, `systemd-mcp` **always** tries to get access to the system logs.
+*   **Log Access**: `systemd-mcp` tries to open the whole journal in this order:
+    *   If running as root or in the same group as the directory `/var/log/journal`, all journal files are accessible.
+    *   Else `systemd-mcp` connects to the `gatekeeper` via `/run/gatekeeper/gatekeeper.socket`. This triggers a polkit request for `com.suse.gatekeeper.readlog`.
+    *   If the gatekeeper isn't usable, only the journal files readable by the current user (e.g. its own `user-<uid>.journal` files) are used. The log output contains a hint about this reduced access.
+
+    Read operations over the stdio transport are always authorized, as the calling user runs the server itself; only write operations still trigger a polkit request.
 
 ## HTTP Transport (OAuth2)
 
@@ -48,7 +53,7 @@ You must specify an OAuth2 controller address using `--controller`.
         *   `mcp:read`: Allows read-only access (e.g., listing units, reading logs).
         *   `mcp:write`: Allows write access (e.g., starting/stopping units).
 
-If the HTTP server is started as a non-root user, it will also use the `gatekeeper` for log access, provided `gatekeeper.socket` is available. If started as `root`, it accesses the journal directly.
+If the HTTP server is started as `root` or in the journal group, it accesses the whole journal directly. Otherwise the `gatekeeper` is used for log access, provided `gatekeeper.socket` is available; if it isn't, only the journal files readable by the current user are shown.
 
 ## HTTP Transport with authentication
 
@@ -79,6 +84,7 @@ To run the server in HTTP mode with TLS, you need a certificate and a key. You c
 | `--enabled-tools`   |           | A comma-separated list of tools to enable. Defaults to all tools.                                       | all     |
 | `--timeout`         |           | Set the timeout for polkit authentication in seconds.                                                   | `5`     |
 | `--noauth`          |           | Disable authorization. Must be set to `ThisIsInsecure`. Mutually exclusive with `--controller`.           | `""`    |
+| `--toon`            |           | Use token optimized object notation for tool output.                                                      | `false` |
 | `--cert-file`       |           | Path to server certificate file (PEM format) for TLS. Requires `--key-file`.                            | `""`    |
 | `--key-file`        |           | Path to server private key file (PEM format) for TLS. Requires `--cert-file`.                           | `""`    |
 | `--version`         |           | Print the version and exit.                                                                             | `false` |
