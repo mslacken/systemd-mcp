@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -20,12 +21,24 @@ import (
 	"github.com/coreos/go-systemd/v22/sdjournal"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	auth "github.com/openSUSE/systemd-mcp/authkeeper"
+	"github.com/openSUSE/systemd-mcp/dbus"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/man"
 	"github.com/openSUSE/systemd-mcp/internal/pkg/sdjournalw"
 )
 
+// how much of the journal the opened handle covers
+type journalAccess int
+
+const (
+	accessNone       journalAccess = iota
+	accessFull                     // every journal file, we are root or in the journal group
+	accessGatekeeper               // every journal file, handed over by the polkit authorized gatekeeper
+	accessUser                     // only the files the calling user may read, i.e. its own user-<uid>.journal
+)
+
 type HostLog struct {
 	journal *sdjournal.Journal
+	access  journalAccess
 	Auth    auth.AuthKeeper
 }
 
@@ -142,9 +155,12 @@ func (sj *HostLog) seekByTimeRange(params *ListLogParams) error {
 }
 
 func (sj *HostLog) isJournalGroupMember() bool {
+	// with volatile storage the journal only lives in /run/log/journal
 	info, err := os.Stat("/var/log/journal")
 	if err != nil {
-		return false
+		if info, err = os.Stat("/run/log/journal"); err != nil {
+			return false
+		}
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -168,82 +184,144 @@ func (sj *HostLog) isJournalGroupMember() bool {
 	return false
 }
 
-// this is a very unusual function, as we have two cases here:
-//  1. we run as root and have to asek via ouath2 that we are allowed to
-//     acess the journal
-//  2. we run as user and have to get the file pointer from the gatekeeper
-//     which triggers a polkit call. If the gatekeeper service isn't
-//     running we also have to start it
+// ask the gatekeeper for the file descriptors of the journal files, which
+// triggers a polkit call in the gatekeeper for the calling process
+func (sj *HostLog) openViaGatekeeper() (*sdjournal.Journal, error) {
+	addr, err := net.ResolveUnixAddr("unix", "/run/gatekeeper/gatekeeper.socket")
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve gatekeeper socket: %w", err)
+	}
+	conn, err := net.DialUnix("unix", nil, addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to gatekeeper: %w", err)
+	}
+	defer conn.Close()
+
+	buf := make([]byte, 32)
+	oob := make([]byte, syscall.CmsgSpace(256*4)) // space for 256 fds
+	n, oobn, flags, _, err := conn.ReadMsgUnix(buf, oob)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read from gatekeeper: %w", err)
+	}
+
+	if flags&syscall.MSG_CTRUNC != 0 {
+		return nil, fmt.Errorf("gatekeeper sent too many file descriptors (control message truncated)")
+	}
+
+	if string(buf[:n]) != "OK\n" {
+		return nil, fmt.Errorf("gatekeeper error: %s", strings.TrimSpace(string(buf[:n])))
+	}
+
+	cmsgs, err := syscall.ParseSocketControlMessage(oob[:oobn])
+	if err != nil || len(cmsgs) == 0 {
+		return nil, fmt.Errorf("no fds received from gatekeeper")
+	}
+
+	fds, err := syscall.ParseUnixRights(&cmsgs[0])
+	if err != nil || len(fds) == 0 {
+		return nil, fmt.Errorf("no fds received from gatekeeper")
+	}
+
+	uintFds := make([]uintptr, len(fds))
+	for i, fd := range fds {
+		uintFds[i] = uintptr(fd)
+	}
+
+	j, err := sdjournalwarp.NewJournalFromHandle(uintFds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open journal from fd: %w", err)
+	}
+	return &j.Journal, nil
+}
+
+// sd_journal_open() silently skips every file the caller may not read and
+// still reports success, so an opened journal can be completely empty. Check
+// for at least one entry before using it as the fallback.
+func hasEntries(j *sdjournal.Journal) bool {
+	if err := j.SeekTail(); err != nil {
+		return false
+	}
+	n, err := j.Previous()
+	return err == nil && n > 0
+}
+
+// check several cases here:
+//  1. we run as root or as a member of the journal group, so sd_journal_open()
+//     gives us every journal file. Access is authorized via oauth2
+//  2. we run as a normal user and get the file descriptors from the gatekeeper,
+//     which triggers a polkit call
+//  3. neither of both, but sd_journal_open() still opens all files which are
+//     readable for the calling user, journald grants every user read access to
+//     its own user-<uid>.journal via an ACL. So as a last resort we run with
+//     the logs of the current user only
 //
-// In both cases we only want to annoy the user with a oauth2 or pplkit
-// call only if access to the log is requested and not at every startup.
+// Only want annoy the user with a oauth2 or polkit call only if access to the log is
+// requested
 // This isn't an ideal solution, but I couldn't think of a better one
 func (sj *HostLog) self_init(ctx context.Context) (allowed bool, err error) {
-	if sj.journal != nil {
-		return sj.Auth.IsReadAuthorized(ctx)
-	} else if os.Geteuid() == 0 || sj.isJournalGroupMember() {
-		// running as root or in journal group, ask via oauth2 is read is authorized, if yes
-		// and journal isn't opened, open it
-		j, err := sdjournal.NewJournal()
-		if err != nil {
-			return false, fmt.Errorf("failed to open journal: %w", err)
-		}
-		sj.journal = j
-	} else {
-		addr, err := net.ResolveUnixAddr("unix", "/run/gatekeeper/gatekeeper.socket")
-		if err != nil {
-			return false, fmt.Errorf("failed to resolve gatekeeper socket: %w", err)
-		}
-		conn, err := net.DialUnix("unix", nil, addr)
-		if err != nil {
-			return false, fmt.Errorf("failed to connect to gatekeeper: %w", err)
-		}
-		defer conn.Close()
-
-		buf := make([]byte, 32)
-		oob := make([]byte, syscall.CmsgSpace(256*4)) // space for 256 fds
-		n, oobn, flags, _, err := conn.ReadMsgUnix(buf, oob)
-		if err != nil {
-			return false, fmt.Errorf("failed to read from gatekeeper: %w", err)
-		}
-
-		if flags&syscall.MSG_CTRUNC != 0 {
-			return false, fmt.Errorf("gatekeeper sent too many file descriptors (control message truncated)")
-		}
-
-		if string(buf[:n]) != "OK\n" {
-			return false, fmt.Errorf("gatekeeper error: %s", string(buf[:n]))
-		}
-
-		cmsgs, err := syscall.ParseSocketControlMessage(oob[:oobn])
-		if err != nil || len(cmsgs) == 0 {
-			return false, fmt.Errorf("no fds received from gatekeeper")
-		}
-
-		fds, err := syscall.ParseUnixRights(&cmsgs[0])
-		if err != nil || len(fds) == 0 {
-			return false, fmt.Errorf("no fds received from gatekeeper")
-		}
-
-		uintFds := make([]uintptr, len(fds))
-		for i, fd := range fds {
-			uintFds[i] = uintptr(fd)
-		}
-
-		j, err := sdjournalwarp.NewJournalFromHandle(uintFds)
-		if err != nil {
-			return false, fmt.Errorf("failed to open journal from fd: %w", err)
-		}
-		sj.journal = &j.Journal
-	}
-	// if journal can be read don't do any more auth calling
-	if !sj.isJournalGroupMember() {
-		allowed, err = sj.Auth.IsReadAuthorized(ctx)
-		if err != nil || !allowed {
-			return allowed, err
+	if sj.journal == nil {
+		if os.Geteuid() == 0 || sj.isJournalGroupMember() {
+			j, err := sdjournal.NewJournal()
+			if err != nil {
+				return false, fmt.Errorf("failed to open journal: %w", err)
+			}
+			sj.journal, sj.access = j, accessFull
+		} else if j, gkErr := sj.openViaGatekeeper(); gkErr == nil {
+			sj.journal, sj.access = j, accessGatekeeper
+		} else {
+			slog.Info("gatekeeper not usable, falling back to the journal files of the current user",
+				slog.Any("error", gkErr))
+			j, err := sdjournal.NewJournal()
+			if err != nil {
+				return false, fmt.Errorf("failed to open journal: %w (gatekeeper: %v)", err, gkErr)
+			}
+			if !hasEntries(j) {
+				j.Close()
+				return false, fmt.Errorf("no readable journal files: %w", gkErr)
+			}
+			sj.journal, sj.access = j, accessUser
 		}
 	}
-	return true, nil
+	// the gatekeeper already asked polkit and members of the journal group may
+	// read the journal anyway, so don't ask a second time
+	if sj.access == accessGatekeeper || sj.isJournalGroupMember() {
+		return true, nil
+	}
+	allowed, err = sj.Auth.IsReadAuthorized(ctx)
+	// without the gatekeeper package polkit doesn't know its action at all. As
+	// only the journal files of the calling user are open, which it may read
+	// anyway, a missing policy mustn't block the access
+	if err != nil && sj.access == accessUser && errors.Is(err, dbus.ErrActionNotRegistered) {
+		slog.Info("no polkit policy for the journal, continuing with the logs of the current user",
+			slog.Any("error", err))
+		return true, nil
+	}
+	return allowed, err
+}
+
+// tell the caller if only a part of the journal is visible
+func (sj *HostLog) accessHint() string {
+	if sj.access != accessUser {
+		return ""
+	}
+	return fmt.Sprintf("Only the journal files which are readable by the current user (uid %d) are "+
+		"open, so entries of system units are missing. Run systemd-mcp as root, add the user to the "+
+		"journal group or start the gatekeeper service to get access to the whole journal.", os.Geteuid())
+}
+
+func logResult(res ListLogResult) (*mcp.CallToolResult, any, error) {
+	jsonBytes, err := json.Marshal(res)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal response: %w", err)
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: string(jsonBytes),
+			},
+		},
+	}, nil, nil
 }
 
 // get the lat log entries for a given unit, else just the last messages
@@ -339,9 +417,14 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		}
 	} else {
 		// Use original pagination logic when no time filters
-		_, err = sj.seekAndSkip(uint64(params.Count), uint64(params.Offset))
+		nrEntries, err := sj.seekAndSkip(uint64(params.Count), uint64(params.Offset))
 		if err != nil {
 			return nil, nil, err
+		}
+		if nrEntries == 0 {
+			// nothing matched, the read head isn't on an entry so don't read one
+			host, _ := os.Hostname()
+			return logResult(ListLogResult{Host: host, Hint: sj.accessHint()})
 		}
 	}
 
@@ -465,6 +548,7 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		Host:       host,
 		NrMessages: len(messages),
 		Messages:   messages,
+		Hint:       sj.accessHint(),
 	}
 	if len(uniqIdentifiers) == 1 {
 		res.Identifier = uniqIdentifiersStr
@@ -533,16 +617,5 @@ func (sj *HostLog) ListLog(ctx context.Context, req *mcp.CallToolRequest, params
 		}
 	}
 
-	jsonBytes, err := json.Marshal(res)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal response: %w", err)
-	}
-
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{
-				Text: string(jsonBytes),
-			},
-		},
-	}, nil, nil
+	return logResult(res)
 }
